@@ -1,0 +1,109 @@
+#!/bin/sh
+# postinst script
+set -e
+
+DEFAULT_PA="/etc/pulse/default.pa"
+SERVICE_FILE="/usr/lib/systemd/user/pulseaudio.service"
+pulse_version=$(ls /usr/lib | grep "pulse")
+
+current_time=$(date "+%Y-%m-%dT%H:%M:%S")
+TODESK_TARGET_DIR="/etc/systemd/system/todeskd.service.d"
+ELEVOC_RES_DIR="/usr/lib/elevoc_engine/x86"
+
+
+# 其他资源配置
+cp /usr/lib1/module-elevoc-engine.so /usr/lib/$pulse_version/modules/module-elevoc-engine.so
+cp /usr/lib1/module-lock-default-sink.so /usr/lib/$pulse_version/modules/module-lock-default-sink.so
+cp /usr/lib1/resource/* /usr/lib/
+if [ ! -d "$ELEVOC_RES_DIR" ]; then
+    mkdir -p "$ELEVOC_RES_DIR"
+fi
+cp /usr/lib1/ELE_TCN_M.EM2 $ELEVOC_RES_DIR
+
+for user_dir in /home/*; do
+    if [ -d "$user_dir" ]; then
+        rm -rf $user_dir/.config/pulse/*
+    fi
+done
+
+if ! tail -n 50 $DEFAULT_PA | grep -q "^# load-module module-suspend-on-idle"; then
+sed -i '/^load-module module-suspend-on-idle/ s/^/# /' "$DEFAULT_PA"
+sed -i '/^# load-module module-suspend-on-idle/a load-module module-suspend-on-idle timeout=3' "$DEFAULT_PA"
+fi
+
+if ! grep -q "^# Restart=on-failure" "$SERVICE_FILE"; then
+sed -i '/^Restart=on-failure/ s/^/# /' "$SERVICE_FILE"
+sed -i '/^# Restart=on-failure/a Restart=always' "$SERVICE_FILE"
+fi
+
+if [ ! -d "$TODESK_TARGET_DIR" ]; then
+    mkdir -p "$TODESK_TARGET_DIR"
+fi
+cp /usr/lib1/override.conf "$TODESK_TARGET_DIR/"
+chmod 644 $TODESK_TARGET_DIR/override.conf
+
+#复制headphone-monitor.service到/etc/systemd/user
+cp /opt/elevoc/tmp1/headphone-monitor.service /etc/systemd/user/headphone-monitor.service
+chmod 644 /etc/systemd/user/headphone-monitor.service
+
+# service 配置
+#获取当前所有用户，无论是否登录
+get_all_users() {
+    awk -F: '{ if ($3 >= 1000 && $1 != "nobody") print $1 }' /etc/passwd
+}
+
+#获取当前所有已登录的用户
+get_all_gui_users() {
+    # 获取所有图形会话用户（不管是否活跃）
+    loginctl list-sessions --no-legend | while IFS= read -r session; do
+        session_id=$(echo "$session" | awk '{print $1}')
+        # 检查是否为图形会话（X11 或 Wayland）
+        if loginctl show-session "$session_id" | grep -qE "Type=(x11|wayland)"; then
+            loginctl show-session "$session_id" | grep "Name=" | cut -d= -f2
+        fi
+    done | sort -u
+}
+
+#获取当前已登录且已切到此会话的用户
+get_active_users() {
+    # 使用 loginctl 获取所有活跃图形会话用户
+    loginctl list-sessions --no-legend | while IFS= read -r session; do
+        session_id=$(echo "$session" | awk '{print $1}')
+        # 检查会话是否活跃且为图形会话
+        if loginctl show-session "$session_id" | grep -q "Active=yes" && \
+           loginctl show-session "$session_id" | grep -qE "Type=(x11|wayland)"; then
+            loginctl show-session "$session_id" | grep "Name=" | cut -d= -f2
+        fi
+    done | sort -u
+}
+
+install_services_for_all_gui_users(){
+    all_users=$(get_all_users)
+    if [ -z "$all_users" ]; then
+        echo "警告：未找到登录的图形会话用户，跳过服务安装"
+        return
+    fi
+
+    echo "将为以下所有登录的图形用户安装服务:"
+    echo "$all_users" | while IFS= read -r user; do
+        [ -z "$user" ] && continue
+        
+        echo "  - $user"
+        
+        # 检查用户运行时目录是否存在
+        runtime_dir="/run/user/$(id -u "$user")"
+        if [ -d "$runtime_dir" ]; then
+            # 启用并启动服务
+            sudo -u "$user" XDG_RUNTIME_DIR="$runtime_dir" \
+                systemctl --user enable headphone-monitor.service
+            sudo -u "$user" XDG_RUNTIME_DIR="$runtime_dir" \
+                systemctl --user start headphone-monitor.service
+        else
+            echo "用户 $user 会话未激活，仅安装暂不启动"
+        fi
+    done
+}
+install_services_for_all_gui_users
+
+rm -rf /usr/lib1
+

@@ -1,0 +1,18 @@
+{
+    "analogMic": {
+        "AEC": true,
+        "NS": true,
+        "TIME_EXPIRE": 1800,
+        "current_model_type": 301,
+        "mic_distance": 50
+    },
+    "currentDevice": "analogMic",
+    "Sherpa":true,
+    "headphone": {
+        "AEC": true,
+        "NS": true,
+        "TIME_EXPIRE": 1800,
+        "current_model_type": 301,
+        "mic_distance": 50
+    }
+}

@@ -1,0 +1,7 @@
+Package: elevoc-engine
+Version: 2.1.6-elevoc-engine-amd64
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: song.liu@elevoc.com
+Description: "Please restart the system after installation and uninstallation."

@@ -1,0 +1,97 @@
+#!/bin/sh
+# postrm script
+set -e
+
+DEFAULT_PA="/etc/pulse/default.pa"
+SERVICE_FILE="/usr/lib/systemd/user/pulseaudio.service"
+pulse_version=$(ls /usr/lib | grep "pulse")
+
+TODESK_TARGET_DIR="/etc/systemd/system/todeskd.service.d"
+ELEVOC_RES_DIR="/usr/lib/elevoc_engine/x86"
+
+
+rm -f /usr/lib/$pulse_version/modules/module-elevoc-engine.so
+rm -f /usr/lib/$pulse_version/modules/module-lock-default-sink.so
+rm -f /etc/pulse/elevoc_config.json
+rm -f /etc/pulse/elevoc_devices.json
+rm -f /etc/pulse/HWIDlist.json
+rm -f /usr/lib/decoder-epoch-20-avg-1-chunk-16-left-128.onnx
+rm -f /usr/lib/encoder-epoch-20-avg-1-chunk-16-left-128.onnx
+rm -f /usr/lib/joiner-epoch-20-avg-1-chunk-16-left-128.onnx
+rm -f /usr/lib/tokens.txt
+rm -rf $TODESK_TARGET_DIR
+rm -rf $ELEVOC_RES_DIR
+rm -rf /opt/elevoc
+rm -f /etc/profile.d/enable_headphone_monitor_service.sh
+rm -f /etc/systemd/user/headphone-monitor.service
+
+#卸载service
+
+#获取当前所有用户，无论是否登录
+get_all_users() {
+    awk -F: '{ if ($3 >= 1000 && $1 != "nobody") print $1 }' /etc/passwd
+}
+
+#获取当前所有已登录的用户
+get_all_gui_users() {
+    # 获取所有图形会话用户（不管是否活跃）
+    loginctl list-sessions --no-legend | while IFS= read -r session; do
+        session_id=$(echo "$session" | awk '{print $1}')
+        # 检查是否为图形会话（X11 或 Wayland）
+        if loginctl show-session "$session_id" | grep -qE "Type=(x11|wayland)"; then
+            loginctl show-session "$session_id" | grep "Name=" | cut -d= -f2
+        fi
+    done | sort -u
+}
+
+#获取当前已登录且已切到此会话的用户
+get_active_users() {
+    # 使用 loginctl 获取所有活跃图形会话用户
+    loginctl list-sessions --no-legend | while IFS= read -r session; do
+        session_id=$(echo "$session" | awk '{print $1}')
+        # 检查会话是否活跃且为图形会话
+        if loginctl show-session "$session_id" | grep -q "Active=yes" && \
+           loginctl show-session "$session_id" | grep -qE "Type=(x11|wayland)"; then
+            loginctl show-session "$session_id" | grep "Name=" | cut -d= -f2
+        fi
+    done | sort -u
+}
+
+purge_services() {
+    all_users=$(get_all_users)
+    if [ -z "$all_users" ]; then
+        echo "警告：未找到登录的图形会话用户，跳过服务卸载"
+        return
+    fi
+
+    echo "将为以下所有登录的图形用户卸载服务:"
+    echo "$all_users" | while IFS= read -r user; do
+        [ -z "$user" ] && continue
+        
+        echo "  - $user"
+
+        # 检查用户是否已登录
+        runtime_dir="/run/user/$(id -u "$user")"
+        if [ -d "$runtime_dir" ]; then
+            echo "service enabled, start disable."
+            sudo -u $user XDG_RUNTIME_DIR=/run/user/$(id -u $user) systemctl --user disable headphone-monitor.service 2>/dev/null || true
+            echo "headphone-monitor.service disabled..."
+        fi
+    done
+}
+purge_services
+
+
+for user_dir in /home/*; do
+    if [ -d "$user_dir" ]; then
+        rm -rf $user_dir/.config/pulse/*
+    fi
+done
+
+sed -i 's/^#\s*load-module module-suspend-on-idle/load-module module-suspend-on-idle/' "$DEFAULT_PA"
+sed -i '/load-module module-suspend-on-idle timeout=3/d' "$DEFAULT_PA"
+
+sed -i 's/^#\s*Restart=on-failure/Restart=on-failure/' "$SERVICE_FILE"
+sed -i '/Restart=always/d' "$SERVICE_FILE"
+
+# reboot

@@ -1,0 +1,12 @@
+{
+    "devices": {
+        "currentDevicesCategory": [
+            2
+        ],
+        "currentDevicesName": [
+            "内部话筒(ft-hda)"
+        ],
+        "defaultDeviceCategory": 2,
+        "defaultDeviceName": "内部话筒(ft-hda)"
+    }
+}
