@@ -79,9 +79,9 @@ pipeline {
           SRC_PULSE="pulseaudio_artifacts/artifacts"
           SRC_SVC="service_artifacts/artifacts"
 
-          # 复制 .so 到包内目录（按你当前仓库：driver/usr/opt/elevoc/lib）
+          # 复制 .so 到包内目录（按你当前仓库：driver/usr/lib1）
           if ls "${SRC_PULSE}"/*.so >/dev/null 2>&1; then
-            cp -v "${SRC_PULSE}"/*.so driver/usr/opt/elevoc/lib/
+            cp -v "${SRC_PULSE}"/*.so ${PKGROOT}/${DEST_SO_DIR}
           else
             echo "⚠️ 未发现 pulseaudio *.so，继续但最终包可能缺少模块"
           fi
@@ -89,7 +89,7 @@ pipeline {
           # 复制 service 产物（你的 service 现在是可执行文件）
           if [ -d "${SRC_SVC}" ] && [ "$(ls -A "${SRC_SVC}" 2>/dev/null)" ]; then
             # 若要放到你现有目录：driver/usr/opt/elevoc/lib/
-            cp -v "${SRC_SVC}"/* driver/usr/opt/elevoc/lib/
+            cp -v "${SRC_SVC}"/* "${PKGROOT}/${DEST_SVC_DIR}
           else
             echo "⚠️ uos-service 无归档制品，跳过"
           fi
