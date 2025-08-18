@@ -88,9 +88,9 @@ pipeline {
           # 复制 service 产物到包内目录（按参数 DEST_SVC_DIR）
           if [ -d "${SRC_SVC}" ] && [ "$(ls -A "${SRC_SVC}" 2>/dev/null)" ]; then
             # 文件
-            find "${SRC_SVC}" -maxdepth 1 -type f -print -exec cp -v {} "${PKGROOT}/${DEST_SVC_DIR}/" \; || true
+            find "${SRC_SVC}" -maxdepth 1 -type f -exec cp -v -t "${PKGROOT}/${DEST_SVC_DIR}/" {} +
             # 目录
-            find "${SRC_SVC}" -maxdepth 1 -mindepth 1 -type d -print -exec cp -rv {} "${PKGROOT}/${DEST_SVC_DIR}/" \; || true
+            find "${SRC_SVC}" -maxdepth 1 -mindepth 1 -type d -exec cp -rv -t "${PKGROOT}/${DEST_SVC_DIR}/" {} +
           else
             echo "[warn] uos-service has no archived artifacts; skip"
           fi
