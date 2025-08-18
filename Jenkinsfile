@@ -72,52 +72,46 @@ pipeline {
     }
 
     stage('Place payloads into package tree') {
-  steps {
-    sh '''
-      bash -euxo pipefail <<BASH
-      shopt -s nullglob
+      steps {
+        sh '''
+          set -e
 
-      SRC_PULSE="pulseaudio_artifacts/artifacts"
-      SRC_SVC="service_artifacts/artifacts"
+          SRC_PULSE="pulseaudio_artifacts/artifacts"
+          SRC_SVC="service_artifacts/artifacts"
 
-      echo "== src pulse list =="
-      ls -al "\${SRC_PULSE}" || true
-      echo "== src service list =="
-      ls -al "\${SRC_SVC}" || true
+          echo "== src pulse (top) ==";    ls -al "${SRC_PULSE}"  || true
+          echo "== src service (top) ==";  ls -al "${SRC_SVC}"    || true
 
-      # ---- copy .so ----
-      so_list=( "\${SRC_PULSE}"/*.so )
-      if [ \${#so_list[@]} -gt 0 ]; then
-        echo "copy \${#so_list[@]} so -> \${PKGROOT}/\${DEST_SO_DIR}/"
-        mkdir -p "\${PKGROOT}/\${DEST_SO_DIR}"
-        cp -v "\${so_list[@]}" "\${PKGROOT}/\${DEST_SO_DIR}/"
-      else
-        echo "[warn] no .so found under \${SRC_PULSE}"
-      fi
-
-      # ---- copy service payloads (files + dirs) ----
-      mkdir -p "\${PKGROOT}/\${DEST_SVC_DIR}"
-
-      svc_files=( "\${SRC_SVC}"/* )
-      if [ \${#svc_files[@]} -gt 0 ]; then
-        for f in "\${svc_files[@]}"; do
-          if [ -f "\$f" ]; then
-            cp -v "\$f" "\${PKGROOT}/\${DEST_SVC_DIR}/"
-          elif [ -d "\$f" ]; then
-            cp -rv "\$f" "\${PKGROOT}/\${DEST_SVC_DIR}/"
+          # ----- 拷贝 .so -----
+          mkdir -p "${PKGROOT}/${DEST_SO_DIR}"
+          if [ -n "$(find "${SRC_PULSE}" -maxdepth 1 -type f -name '*.so' -print -quit 2>/dev/null)" ]; then
+            find "${SRC_PULSE}" -maxdepth 1 -type f -name '*.so' -exec cp -v -t "${PKGROOT}/${DEST_SO_DIR}/" {} +
+          else
+            echo "[warn] no .so under ${SRC_PULSE}"
           fi
-        done
-      else
-        echo "[warn] no service artifacts under \${SRC_SVC}"
-      fi
 
-      echo "== package tree preview =="
-      ls -al "\${PKGROOT}/\${DEST_SO_DIR}"  || true
-      ls -al "\${PKGROOT}/\${DEST_SVC_DIR}" || true
-BASH
-    '''
-  }
-}
+          # ----- 拷贝 service 产物（文件 + 目录） -----
+          mkdir -p "${PKGROOT}/${DEST_SVC_DIR}"
+          if [ -d "${SRC_SVC}" ] && [ -n "$(ls -A "${SRC_SVC}" 2>/dev/null)" ]; then
+            # 文件
+            if [ -n "$(find "${SRC_SVC}" -maxdepth 1 -type f -print -quit 2>/dev/null)" ]; then
+              find "${SRC_SVC}" -maxdepth 1 -type f -exec cp -v -t "${PKGROOT}/${DEST_SVC_DIR}/" {} +
+            fi
+            # 目录
+            if [ -n "$(find "${SRC_SVC}" -maxdepth 1 -mindepth 1 -type d -print -quit 2>/dev/null)" ]; then
+              find "${SRC_SVC}" -maxdepth 1 -mindepth 1 -type d -exec cp -rv -t "${PKGROOT}/${DEST_SVC_DIR}/" {} +
+            fi
+          else
+            echo "[warn] no service artifacts under ${SRC_SVC}"
+          fi
+
+          echo "== package tree preview =="
+          ls -al "${PKGROOT}/${DEST_SO_DIR}"  || true
+          ls -al "${PKGROOT}/${DEST_SVC_DIR}" || true
+        '''
+      }
+    }
+
 
 
     stage('Derive version from .so (optional)') {
@@ -148,34 +142,41 @@ BASH
         sh '''
           set -e
           VER="${PKG_VERSION:-${DEB_VER:-1.0.0}}"
-          PKG="uos-audio"
-          ARCH="amd64"
+          PKG="${PKG_NAME}"
+          ARCH="${DEB_ARCH}"
 
           # 目录 0755、文件默认 0644
-          find driver -type d -print0 | xargs -0 -r chmod 0755
-          find driver -type f -print0 | xargs -0 -r chmod 0644
+          find "${PKGROOT}" -type d -print0 | xargs -0 -r chmod 0755
+          find "${PKGROOT}" -type f -print0 | xargs -0 -r chmod 0644
 
-          # 可执行放 0755（bin 下）
-          if [ -d driver/usr/bin ]; then
-            find driver/usr/bin -type f -print0 | xargs -0 -r chmod 0755
+          # 若将来把可执行放 /usr/bin，这里会给 +x；现在你的可执行在 DEST_SVC_DIR，也给 +x
+          if [ -d "${PKGROOT}/usr/bin" ]; then
+            find "${PKGROOT}/usr/bin" -type f -print0 | xargs -0 -r chmod 0755
           fi
-          # 若有其它需要可执行权限的文件也可在此处加
+          if [ -d "${PKGROOT}/${DEST_SVC_DIR}" ]; then
+            find "${PKGROOT}/${DEST_SVC_DIR}" -maxdepth 1 -type f -print0 | xargs -0 -r chmod 0755
+          fi
 
-          # 维护脚本必须可执行（存在才改）
+          # 维护脚本必须可执行
           for s in preinst postinst prerm postrm; do
-            [ -f "driver/DEBIAN/$s" ] && chmod 0755 "driver/DEBIAN/$s" || true
+            [ -f "${PKGROOT}/DEBIAN/$s" ] && chmod 0755 "${PKGROOT}/DEBIAN/$s" || true
           done
 
-          OUT="dist/${PKG}_${VER}_${ARCH}.deb"
+          mkdir -p "${DIST_DIR}"
+          OUT="${DIST_DIR}/${PKG}_${VER}_${ARCH}.deb"
           echo "== 构建 Deb =="
 
-          dpkg-deb -b driver "${OUT}"
+          dpkg-deb -b "${PKGROOT}" "${OUT}"
           echo "产物: ${OUT}"
           ls -lh "${OUT}"
+
+          echo "== deb contents =="
+          dpkg-deb -c "${OUT}" | sed 's/^/  /'
         '''
         archiveArtifacts artifacts: 'dist/*.deb', fingerprint: true
       }
     }
+
   }
   
 }
