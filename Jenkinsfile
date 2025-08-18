@@ -72,36 +72,35 @@ pipeline {
     }
 
     stage('Place payloads into package tree') {
-      steps {
-        sh '''
-          bash -euxo pipefail <<'BASH'
-          SRC_PULSE="pulseaudio_artifacts/artifacts"
-          SRC_SVC="service_artifacts/artifacts"
+  steps {
+    sh '''
+      bash -euxo pipefail <<BASH
+      SRC_PULSE="pulseaudio_artifacts/artifacts"
+      SRC_SVC="service_artifacts/artifacts"
 
-          # 复制 .so 到包内目录（按参数 DEST_SO_DIR）
-          if ls "${SRC_PULSE}"/*.so >/dev/null 2>&1; then
-            cp -v "${SRC_PULSE}"/*.so "${PKGROOT}/${DEST_SO_DIR}/"
-          else
-            echo "[warn] no pulseaudio *.so found; package may miss modules"
-          fi
+      # 复制 .so 到包内目录
+      if ls "${SRC_PULSE}"/*.so >/dev/null 2>&1; then
+        cp -v "${SRC_PULSE}"/*.so "${PKGROOT}/${DEST_SO_DIR}/"
+      else
+        echo "[warn] no pulseaudio *.so found; package may miss modules"
+      fi
 
-          # 复制 service 产物到包内目录（按参数 DEST_SVC_DIR）
-          if [ -d "${SRC_SVC}" ] && [ "$(ls -A "${SRC_SVC}" 2>/dev/null)" ]; then
-            # 文件
-            find "${SRC_SVC}" -maxdepth 1 -type f -exec cp -v -t "${PKGROOT}/${DEST_SVC_DIR}/" {} +
-            # 目录
-            find "${SRC_SVC}" -maxdepth 1 -mindepth 1 -type d -exec cp -rv -t "${PKGROOT}/${DEST_SVC_DIR}/" {} +
-          else
-            echo "[warn] uos-service has no archived artifacts; skip"
-          fi
+      # 复制 service 产物到包内目录（文件与目录都兼容）
+      if [ -d "${SRC_SVC}" ] && [ "$(ls -A "${SRC_SVC}" 2>/dev/null)" ]; then
+        find "${SRC_SVC}" -maxdepth 1 -type f -exec cp -v -t "${PKGROOT}/${DEST_SVC_DIR}/" {} +
+        find "${SRC_SVC}" -maxdepth 1 -mindepth 1 -type d -exec cp -rv -t "${PKGROOT}/${DEST_SVC_DIR}/" {} +
+      else
+        echo "[warn] uos-service has no archived artifacts; skip"
+      fi
 
-          echo "== package tree preview =="
-          ls -al "${PKGROOT}/${DEST_SO_DIR}"  || true
-          ls -al "${PKGROOT}/${DEST_SVC_DIR}" || true
-    BASH
-        '''
-      }
+      echo "== package tree preview =="
+      ls -al "${PKGROOT}/${DEST_SO_DIR}"  || true
+      ls -al "${PKGROOT}/${DEST_SVC_DIR}" || true
+BASH
+    '''
   }
+}
+
 
 
 
