@@ -42,123 +42,122 @@ pipeline {
         '''
       }
     }
-  }
 
-  stage('Fetch artifacts from children') {
-    steps {
-      script {
-        // selector 选择器
-        def selEngine  = params.ENGINE_SELECTOR == 'lastStable' ? lastStable()  : lastSuccessful()
-        def selService = params.SERVICE_SELECTOR == 'lastStable' ? lastStable()  : lastSuccessful()
+    stage('Fetch artifacts from children') {
+      steps {
+        script {
+          // selector 选择器
+          def selEngine  = params.ENGINE_SELECTOR == 'lastStable' ? lastStable()  : lastSuccessful()
+          def selService = params.SERVICE_SELECTOR == 'lastStable' ? lastStable()  : lastSuccessful()
 
-        // 从 pulseaudio Job 复制 *.so
-        copyArtifacts projectName: params.ENGINE_JOB,
-                      selector: selEngine,
-                      filter: 'artifacts/*.so',
-                      fingerprintArtifacts: true,
-                      target: "${env.WORKSPACE}/pulseaudio_artifacts"
+          // 从 pulseaudio Job 复制 *.so
+          copyArtifacts projectName: params.ENGINE_JOB,
+                        selector: selEngine,
+                        filter: 'artifacts/*.so',
+                        fingerprintArtifacts: true,
+                        target: "${env.WORKSPACE}/pulseaudio_artifacts"
 
-        // 从 service Job 复制全部 artifacts（按你那边归档的真实路径来，这里假设都在 artifacts/ 下）
-        copyArtifacts projectName: params.SERVICE_JOB,
-                      selector: selService,
-                      filter: 'artifacts/**',
-                      fingerprintArtifacts: true,
-                      target: "${env.WORKSPACE}/service_artifacts"
-      }
-      sh '''
-        echo "== Pulseaudio artifacts ==" && ls -al pulseaudio_artifacts || true
-        echo "== Service artifacts =="    && ls -alR service_artifacts  || true
-      '''
-    }
-  }
-
-  stage('Place payloads into package tree') {
-    steps {
-      sh '''
-        set -e
-
-        SRC_PULSE="pulseaudio_artifacts/artifacts"
-        SRC_SVC="service_artifacts/artifacts"
-
-        # 复制 .so 到包内目录（按你当前仓库：driver/usr/opt/elevoc/lib）
-        if ls "${SRC_PULSE}"/*.so >/dev/null 2>&1; then
-          cp -v "${SRC_PULSE}"/*.so driver/usr/opt/elevoc/lib/
-        else
-          echo "⚠️ 未发现 pulseaudio *.so，继续但最终包可能缺少模块"
-        fi
-
-        # 复制 service 产物（你的 service 现在是可执行文件）
-        if [ -d "${SRC_SVC}" ] && [ "$(ls -A "${SRC_SVC}" 2>/dev/null)" ]; then
-          # 若要放到你现有目录：driver/usr/opt/elevoc/lib/
-          cp -v "${SRC_SVC}"/* driver/usr/opt/elevoc/lib/
-        else
-          echo "⚠️ uos-service 无归档制品，跳过"
-        fi
-
-        echo "== 包内文件预览 =="
-        ls -al driver/usr/opt/elevoc/lib || true
-        ls -al driver/usr/bin || true
-      '''
-    }
-  }
-
-
-  stage('Derive version from .so (optional)') {
-    when { expression { return !params.PKG_VERSION?.trim() } }
-    steps {
-      script {
-        def list = sh(
-          script: 'ls pulseaudio_artifacts/artifacts/*.so 2>/dev/null | sed "s#.*/##"',
-          returnStdout: true
-        ).trim()
-        def ver = ''
-        if (list) {
-          for (n in list.split("\\n")) {
-            def m = (n =~ /module-(?:elevoc-engine|lock-default-sink)_[A-Za-z0-9]+_([0-9.]+)_[A-Za-z0-9]+\\.so/)
-            if (m.find()) { ver = m.group(1); break }
-          }
+          // 从 service Job 复制全部 artifacts（按你那边归档的真实路径来，这里假设都在 artifacts/ 下）
+          copyArtifacts projectName: params.SERVICE_JOB,
+                        selector: selService,
+                        filter: 'artifacts/**',
+                        fingerprintArtifacts: true,
+                        target: "${env.WORKSPACE}/service_artifacts"
         }
-        if (!ver) ver = '1.0.0'
-        env.DEB_VER = ver
-        echo "自动解析到版本：${ver}"
+        sh '''
+          echo "== Pulseaudio artifacts ==" && ls -al pulseaudio_artifacts || true
+          echo "== Service artifacts =="    && ls -alR service_artifacts  || true
+        '''
+      }
+    }
+
+    stage('Place payloads into package tree') {
+      steps {
+        sh '''
+          set -e
+
+          SRC_PULSE="pulseaudio_artifacts/artifacts"
+          SRC_SVC="service_artifacts/artifacts"
+
+          # 复制 .so 到包内目录（按你当前仓库：driver/usr/opt/elevoc/lib）
+          if ls "${SRC_PULSE}"/*.so >/dev/null 2>&1; then
+            cp -v "${SRC_PULSE}"/*.so driver/usr/opt/elevoc/lib/
+          else
+            echo "⚠️ 未发现 pulseaudio *.so，继续但最终包可能缺少模块"
+          fi
+
+          # 复制 service 产物（你的 service 现在是可执行文件）
+          if [ -d "${SRC_SVC}" ] && [ "$(ls -A "${SRC_SVC}" 2>/dev/null)" ]; then
+            # 若要放到你现有目录：driver/usr/opt/elevoc/lib/
+            cp -v "${SRC_SVC}"/* driver/usr/opt/elevoc/lib/
+          else
+            echo "⚠️ uos-service 无归档制品，跳过"
+          fi
+
+          echo "== 包内文件预览 =="
+          ls -al driver/usr/opt/elevoc/lib || true
+          ls -al driver/usr/bin || true
+        '''
+      }
+    }
+
+
+    stage('Derive version from .so (optional)') {
+      when { expression { return !params.PKG_VERSION?.trim() } }
+      steps {
+        script {
+          def list = sh(
+            script: 'ls pulseaudio_artifacts/artifacts/*.so 2>/dev/null | sed "s#.*/##"',
+            returnStdout: true
+          ).trim()
+          def ver = ''
+          if (list) {
+            for (n in list.split("\\n")) {
+              def m = (n =~ /module-(?:elevoc-engine|lock-default-sink)_[A-Za-z0-9]+_([0-9.]+)_[A-Za-z0-9]+\\.so/)
+              if (m.find()) { ver = m.group(1); break }
+            }
+          }
+          if (!ver) ver = '1.0.0'
+          env.DEB_VER = ver
+          echo "自动解析到版本：${ver}"
+        }
+      }
+    }
+
+
+    stage('Build .deb (dpkg-deb -b)') {
+      steps {
+        sh '''
+          set -e
+          VER="${PKG_VERSION:-${DEB_VER:-1.0.0}}"
+          PKG="uos-audio"
+          ARCH="amd64"
+
+          # 目录 0755、文件默认 0644
+          find driver -type d -print0 | xargs -0 -r chmod 0755
+          find driver -type f -print0 | xargs -0 -r chmod 0644
+
+          # 可执行放 0755（bin 下）
+          if [ -d driver/usr/bin ]; then
+            find driver/usr/bin -type f -print0 | xargs -0 -r chmod 0755
+          fi
+          # 若有其它需要可执行权限的文件也可在此处加
+
+          # 维护脚本必须可执行（存在才改）
+          for s in preinst postinst prerm postrm; do
+            [ -f "driver/DEBIAN/$s" ] && chmod 0755 "driver/DEBIAN/$s" || true
+          done
+
+          OUT="dist/${PKG}_${VER}_${ARCH}.deb"
+          echo "== 构建 Deb =="
+
+          dpkg-deb -b driver "${OUT}"
+          echo "产物: ${OUT}"
+          ls -lh "${OUT}"
+        '''
+        archiveArtifacts artifacts: 'dist/*.deb', fingerprint: true
       }
     }
   }
-
-
-  stage('Build .deb (dpkg-deb -b)') {
-    steps {
-      sh '''
-        set -e
-        VER="${PKG_VERSION:-${DEB_VER:-1.0.0}}"
-        PKG="uos-audio"
-        ARCH="amd64"
-
-        # 目录 0755、文件默认 0644
-        find driver -type d -print0 | xargs -0 -r chmod 0755
-        find driver -type f -print0 | xargs -0 -r chmod 0644
-
-        # 可执行放 0755（bin 下）
-        if [ -d driver/usr/bin ]; then
-          find driver/usr/bin -type f -print0 | xargs -0 -r chmod 0755
-        fi
-        # 若有其它需要可执行权限的文件也可在此处加
-
-        # 维护脚本必须可执行（存在才改）
-        for s in preinst postinst prerm postrm; do
-          [ -f "driver/DEBIAN/$s" ] && chmod 0755 "driver/DEBIAN/$s" || true
-        done
-
-        OUT="dist/${PKG}_${VER}_${ARCH}.deb"
-        echo "== 构建 Deb =="
-
-        dpkg-deb -b driver "${OUT}"
-        echo "产物: ${OUT}"
-        ls -lh "${OUT}"
-      '''
-      archiveArtifacts artifacts: 'dist/*.deb', fingerprint: true
-    }
-  }
-
   
 }
