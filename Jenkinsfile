@@ -75,33 +75,49 @@ pipeline {
   steps {
     sh '''
       bash -euxo pipefail <<BASH
+      shopt -s nullglob
+
       SRC_PULSE="pulseaudio_artifacts/artifacts"
       SRC_SVC="service_artifacts/artifacts"
 
-      # 复制 .so 到包内目录
-      if ls "${SRC_PULSE}"/*.so >/dev/null 2>&1; then
-        cp -v "${SRC_PULSE}"/*.so "${PKGROOT}/${DEST_SO_DIR}/"
+      echo "== src pulse list =="
+      ls -al "\${SRC_PULSE}" || true
+      echo "== src service list =="
+      ls -al "\${SRC_SVC}" || true
+
+      # ---- copy .so ----
+      so_list=( "\${SRC_PULSE}"/*.so )
+      if [ \${#so_list[@]} -gt 0 ]; then
+        echo "copy \${#so_list[@]} so -> \${PKGROOT}/\${DEST_SO_DIR}/"
+        mkdir -p "\${PKGROOT}/\${DEST_SO_DIR}"
+        cp -v "\${so_list[@]}" "\${PKGROOT}/\${DEST_SO_DIR}/"
       else
-        echo "[warn] no pulseaudio *.so found; package may miss modules"
+        echo "[warn] no .so found under \${SRC_PULSE}"
       fi
 
-      # 复制 service 产物到包内目录（文件与目录都兼容）
-      if [ -d "${SRC_SVC}" ] && [ "$(ls -A "${SRC_SVC}" 2>/dev/null)" ]; then
-        find "${SRC_SVC}" -maxdepth 1 -type f -exec cp -v -t "${PKGROOT}/${DEST_SVC_DIR}/" {} +
-        find "${SRC_SVC}" -maxdepth 1 -mindepth 1 -type d -exec cp -rv -t "${PKGROOT}/${DEST_SVC_DIR}/" {} +
+      # ---- copy service payloads (files + dirs) ----
+      mkdir -p "\${PKGROOT}/\${DEST_SVC_DIR}"
+
+      svc_files=( "\${SRC_SVC}"/* )
+      if [ \${#svc_files[@]} -gt 0 ]; then
+        for f in "\${svc_files[@]}"; do
+          if [ -f "\$f" ]; then
+            cp -v "\$f" "\${PKGROOT}/\${DEST_SVC_DIR}/"
+          elif [ -d "\$f" ]; then
+            cp -rv "\$f" "\${PKGROOT}/\${DEST_SVC_DIR}/"
+          fi
+        done
       else
-        echo "[warn] uos-service has no archived artifacts; skip"
+        echo "[warn] no service artifacts under \${SRC_SVC}"
       fi
 
       echo "== package tree preview =="
-      ls -al "${PKGROOT}/${DEST_SO_DIR}"  || true
-      ls -al "${PKGROOT}/${DEST_SVC_DIR}" || true
+      ls -al "\${PKGROOT}/\${DEST_SO_DIR}"  || true
+      ls -al "\${PKGROOT}/\${DEST_SVC_DIR}" || true
 BASH
     '''
   }
 }
-
-
 
 
     stage('Derive version from .so (optional)') {
