@@ -74,32 +74,35 @@ pipeline {
     stage('Place payloads into package tree') {
       steps {
         sh '''
-          set -e
-
+          bash -euxo pipefail <<'BASH'
           SRC_PULSE="pulseaudio_artifacts/artifacts"
           SRC_SVC="service_artifacts/artifacts"
 
-          # 复制 .so 到包内目录（按你当前仓库：driver/usr/lib1）
+          # 复制 .so 到包内目录（按参数 DEST_SO_DIR）
           if ls "${SRC_PULSE}"/*.so >/dev/null 2>&1; then
-            cp -v "${SRC_PULSE}"/*.so ${PKGROOT}/${DEST_SO_DIR}
+            cp -v "${SRC_PULSE}"/*.so "${PKGROOT}/${DEST_SO_DIR}/"
           else
-            echo "⚠️ 未发现 pulseaudio *.so，继续但最终包可能缺少模块"
+            echo "[warn] no pulseaudio *.so found; package may miss modules"
           fi
 
-          # 复制 service 产物（你的 service 现在是可执行文件）
+          # 复制 service 产物到包内目录（按参数 DEST_SVC_DIR）
           if [ -d "${SRC_SVC}" ] && [ "$(ls -A "${SRC_SVC}" 2>/dev/null)" ]; then
-            # 若要放到你现有目录：driver/usr/opt/elevoc/lib/
-            cp -v "${SRC_SVC}"/* "${PKGROOT}/${DEST_SVC_DIR}
+            # 文件
+            find "${SRC_SVC}" -maxdepth 1 -type f -print -exec cp -v {} "${PKGROOT}/${DEST_SVC_DIR}/" \; || true
+            # 目录
+            find "${SRC_SVC}" -maxdepth 1 -mindepth 1 -type d -print -exec cp -rv {} "${PKGROOT}/${DEST_SVC_DIR}/" \; || true
           else
-            echo "⚠️ uos-service 无归档制品，跳过"
+            echo "[warn] uos-service has no archived artifacts; skip"
           fi
 
-          echo "== 包内文件预览 =="
-          ls -al driver/usr/opt/elevoc/lib || true
-          ls -al driver/usr/bin || true
+          echo "== package tree preview =="
+          ls -al "${PKGROOT}/${DEST_SO_DIR}"  || true
+          ls -al "${PKGROOT}/${DEST_SVC_DIR}" || true
+    BASH
         '''
       }
-    }
+  }
+
 
 
     stage('Derive version from .so (optional)') {
