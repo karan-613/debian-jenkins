@@ -24,8 +24,8 @@ pipeline {
     string(name: 'DEST_SVC_DIR', defaultValue: 'opt/elevoc/tmp1',                description: 'service 产物安装目录（相对 PKGROOT）')
 
         // 可选：自定义 RPATH（不填则按架构给默认值）
-    string(name: 'CUSTOM_RPATH_AMD64', defaultValue: '', description: '自定义 amd64 RPATH（留空用默认：$ORIGIN/platforms:/usr/lib/x86_64-linux-gnu:/lib64）')
-    string(name: 'CUSTOM_RPATH_ARM64', defaultValue: '', description: '自定义 arm64 RPATH（留空用默认：$ORIGIN/platforms:/usr/lib/aarch64-linux-gnu:/lib/aarch64-linux-gnu）')
+    string(name: 'CUSTOM_RPATH_AMD64', defaultValue: '', description: '自定义 amd64 RPATH（留空用默认：\$ORIGIN:/usr/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu/pulseaudio:/lib64）')
+    string(name: 'CUSTOM_RPATH_ARM64', defaultValue: '', description: '自定义 arm64 RPATH（留空用默认：\$ORIGIN:/usr/lib/aarch64-linux-gnu:/lib/aarch64-linux-gnu）')
   }
 
   environment {
@@ -131,8 +131,8 @@ pipeline {
           command -v patchelf >/dev/null 2>&1 || { echo "[warn] patchelf 不可用，跳过 RPATH 修正"; exit 0; }
 
           # 2) 选定 RPATH（优先使用自定义参数）
-          RPATH_AMD64="${CUSTOM_RPATH_AMD64:-'$ORIGIN/platforms:/usr/lib/x86_64-linux-gnu:/lib64'}"
-          RPATH_ARM64="${CUSTOM_RPATH_ARM64:-'$ORIGIN/platforms:/usr/lib/aarch64-linux-gnu:/lib/aarch64-linux-gnu'}"
+          RPATH_AMD64="${CUSTOM_RPATH_AMD64:-'\$ORIGIN:/usr/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu/pulseaudio:/lib64'}"
+          RPATH_ARM64="${CUSTOM_RPATH_ARM64:-'\$ORIGIN:/usr/lib/aarch64-linux-gnu:/lib/aarch64-linux-gnu'}"
           case "${DEB_ARCH}" in
             amd64) RPATH="${RPATH_AMD64}" ;;
             arm64) RPATH="${RPATH_ARM64}" ;;
