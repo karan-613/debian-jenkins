@@ -21,7 +21,11 @@ pipeline {
 
     // 产物要放入包内的目标路径（若你的 deb 仓库用自定义目录，只改这两项）
     string(name: 'DEST_SO_DIR',  defaultValue: 'usr/lib1', description: 'so 安装到 Deb 包内的目录（相对 PKGROOT）')
-    string(name: 'DEST_SVC_DIR', defaultValue: 'usr/opt/elevoc/lib',                description: 'service 产物安装目录（相对 PKGROOT）')
+    string(name: 'DEST_SVC_DIR', defaultValue: 'opt/elevoc/tmp1',                description: 'service 产物安装目录（相对 PKGROOT）')
+
+        // 可选：自定义 RPATH（不填则按架构给默认值）
+    string(name: 'CUSTOM_RPATH_AMD64', defaultValue: '', description: '自定义 amd64 RPATH（留空用默认：$ORIGIN/platforms:/usr/lib/x86_64-linux-gnu:/lib64）')
+    string(name: 'CUSTOM_RPATH_ARM64', defaultValue: '', description: '自定义 arm64 RPATH（留空用默认：$ORIGIN/platforms:/usr/lib/aarch64-linux-gnu:/lib/aarch64-linux-gnu）')
   }
 
   environment {
@@ -112,7 +116,53 @@ pipeline {
       }
     }
 
+    /* === 新增：用 patchelf 修改 RPATH === */
+    stage('Patch RPATH (patchelf)') {
+      steps {
+        sh '''
+          set -e
 
+          # 1) 确保 patchelf 可用
+          if ! command -v patchelf >/dev/null 2>&1; then
+            echo "[info] installing patchelf ..."
+            (sudo -n apt-get update || true)
+            (sudo -n apt-get install -y patchelf || sudo apt-get install -y patchelf || apt-get install -y patchelf || true)
+          fi
+          command -v patchelf >/dev/null 2>&1 || { echo "[warn] patchelf 不可用，跳过 RPATH 修正"; exit 0; }
+
+          # 2) 选定 RPATH（优先使用自定义参数）
+          RPATH_AMD64="${CUSTOM_RPATH_AMD64:-'$ORIGIN/platforms:/usr/lib/x86_64-linux-gnu:/lib64'}"
+          RPATH_ARM64="${CUSTOM_RPATH_ARM64:-'$ORIGIN/platforms:/usr/lib/aarch64-linux-gnu:/lib/aarch64-linux-gnu'}"
+          case "${DEB_ARCH}" in
+            amd64) RPATH="${RPATH_AMD64}" ;;
+            arm64) RPATH="${RPATH_ARM64}" ;;
+            *)     RPATH="$ORIGIN/platforms" ;;
+          esac
+          echo "[info] target RPATH: ${RPATH} (arch=${DEB_ARCH})"
+
+          TARGET_DIR="${PKGROOT}/${DEST_SO_DIR}"
+          [ -d "${TARGET_DIR}" ] || { echo "[warn] ${TARGET_DIR} 不存在，跳过"; exit 0; }
+
+          # 3) 只对两类目标做处理（存在就改）
+          ENGINE=$(ls "${TARGET_DIR}"/module-elevoc-engine_*.so 2>/dev/null | head -n1 || true)
+          TINY=$(ls "${TARGET_DIR}"/libelevoc-tiny-engine_*.so 2>/dev/null | head -n1 || true)
+
+          for so in "${ENGINE}" "${TINY}"; do
+            [ -f "${so}" ] || continue
+            echo "[info] patching $(basename "${so}") ..."
+            echo "  old:"
+            (readelf -d "${so}" | egrep 'RPATH|RUNPATH' || true)
+            patchelf --set-rpath "${RPATH}" "${so}"
+            echo "  new:"
+            (readelf -d "${so}" | egrep 'RPATH|RUNPATH' || true)
+          done
+
+          if [ ! -f "${ENGINE}" ] && [ ! -f "${TINY}" ]; then
+            echo "[warn] 未找到需要修改的 .so（module-elevoc-engine_* / libelevoc-tiny-engine_*），跳过"
+          fi
+        '''
+      }
+    }
 
     stage('Derive version from .so (optional)') {
       when { expression { return !params.PKG_VERSION?.trim() } }
@@ -178,5 +228,5 @@ pipeline {
     }
 
   }
-  
+
 }
