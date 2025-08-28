@@ -119,77 +119,74 @@ pipeline {
     stage('Normalize names & manifest (方案A)') {
       steps {
         sh '''
-          bash -euo pipefail <<'BASH'
-          set -x
+          bash -lc '
+            set -euo pipefail; set -x
 
-          SO_DIR="${PKGROOT}/${DEST_SO_DIR}"
-          [ -d "$SO_DIR" ] || exit 0
+            SO_DIR="${PKGROOT}/${DEST_SO_DIR}"
+            [ -d "$SO_DIR" ] || exit 0
 
-          # 工具：objcopy 可能未装，装一下
-          if ! command -v objcopy >/dev/null 2>&1; then
-            (sudo -n apt-get update || true)
-            (sudo -n apt-get install -y binutils || true)
-          fi
+            # 确保 objcopy 可用
+            if ! command -v objcopy >/dev/null 2>&1; then
+              (sudo -n apt-get update || true)
+              (sudo -n apt-get install -y binutils || true)
+            fi
 
-          # 写入自定义元数据到 .elevoc.meta 段
-          write_meta() {
-            local so="$1" comp="$2" ver="$3" arch="$4" os="$5"
-            local meta; meta="$(mktemp)"
-            printf 'component=%s\nversion=%s\narch=%s\nos=%s\n' "$comp" "$ver" "$arch" "$os" > "$meta"
-            objcopy --remove-section .elevoc.meta "$so" 2>/dev/null || true
-            objcopy --add-section .elevoc.meta="$meta" --set-section-flags .elevoc.meta=noload,readonly "$so"
-            rm -f "$meta"
-          }
+            write_meta() {
+              local so="$1" comp="$2" ver="$3" arch="$4" os="$5"
+              local meta; meta="$(mktemp)"
+              printf "component=%s\\nversion=%s\\narch=%s\\nos=%s\\n" "$comp" "$ver" "$arch" "$os" > "$meta"
+              objcopy --remove-section .elevoc.meta "$so" 2>/dev/null || true
+              objcopy --add-section .elevoc.meta="$meta" --set-section-flags .elevoc.meta=noload,readonly "$so"
+              rm -f "$meta"
+            }
 
-          normalize_one() {
-            local so="$1" base os ver arch comp norm
-            base="$(basename "$so")"
+            normalize_one() {
+              local path="$1" base os="" ver="" arch="" comp="" norm=""
+              base="$(basename "$path")"
 
-            case "$base" in
-              module-elevoc-engine_* )      comp="engine" ;;
-              module-lock-default-sink_* )  comp="lock" ;;
-              libelevoc-tiny-engine_* )     comp="elevoc-tiny" ;;
-              * ) return 0 ;;
-            esac
+              case "$base" in
+                module-elevoc-engine_* )      comp="engine";;
+                module-lock-default-sink_* )  comp="lock";;
+                libelevoc-tiny-engine_* )     comp="elevoc-tiny";;
+                * ) return 0;;
+              esac
 
-            # 从带版本名里提取 os / version / arch
-            os="$(printf '%s' "$base" | sed -n 's/^[^_]*_\\([A-Za-z0-9]\\+\\)_.*/\\1/p')"
-            ver="$(printf '%s' "$base" | sed -n 's/.*_\\([0-9.]\\+\\)_.*/\\1/p')"
-            arch="$(printf '%s' "$base" | sed -n 's/.*_[0-9.]\\+_\\([A-Za-z0-9]\\+\\)\\.so/\\1/p')"
-
-            # 规范名：
-            # - PA 模块：去掉 _<ver>_<arch>，保留 OS 后缀：module-xxx_<OS>.so
-            # - elevoc-tiny：统一成 libelevoc-tiny-engine.so
-            case "$comp" in
-              elevoc-tiny)
+              # 提取字段（注意架构含下划线）
+              if [ "$comp" = "elevoc-tiny" ]; then
+                ver="$(  echo "$base" | sed -E "s/.*_([0-9.]+)_[A-Za-z0-9_]+\\.so$/\\1/")"
+                arch="$( echo "$base" | sed -E "s/.*_[0-9.]+_([A-Za-z0-9_]+)\\.so$/\\1/")"
+                os=""
                 norm="libelevoc-tiny-engine.so"
-                ;;
-              *)
-                norm="$(printf '%s' "$base" | sed 's/_[0-9.][0-9.]*_[A-Za-z0-9]\\+\\.so$/.so/')"
-                ;;
-            esac
+              else
+                os="$(   echo "$base" | sed -E "s/^[^_]*_([A-Za-z0-9]+)_.*/\\1/")"
+                ver="$(  echo "$base" | sed -E "s/.*_([0-9.]+)_[A-Za-z0-9_]+\\.so$/\\1/")"
+                arch="$( echo "$base" | sed -E "s/.*_[0-9.]+_([A-Za-z0-9_]+)\\.so$/\\1/")"
+                # 规范名：去掉 _<ver>_<arch>，保留 OS
+                norm="$(echo "$base" | sed -E "s/_[0-9.]+_[A-Za-z0-9_]+\\.so$/.so/")"
+              fi
 
-            # 把元数据写进“带版本号”的文件里（实体文件）
-            write_meta "$so" "$comp" "$ver" "$arch" "$os"
+              write_meta "$path" "$comp" "$ver" "$arch" "$os"
 
-            # 生成/刷新规范名 -> 带版本文件 的软链接（包里同时保留两种命名更稳）
-            ln -sf "$base" "${SO_DIR}/${norm}"
+              # 生成软链（规范名 -> 带版本的实体文件）
+              ln -sf "$base" "$SO_DIR/$norm"
 
-            echo "[meta] $base  ->  ${norm}  {component=$comp, version=$ver, arch=$arch, os=$os}"
-            readelf -p .elevoc.meta "$so" || true
-          }
+              echo "[meta] $base -> $norm {c=$comp v=$ver arch=$arch os=$os}"
+              # 在“实体文件”上读 meta（避免对软链读失败）
+              readelf -p .elevoc.meta "$path" || true
+            }
 
-          for so in "${SO_DIR}"/*.so; do
-            [ -f "$so" ] || continue
-            normalize_one "$so"
-          done
+            for so in "$SO_DIR"/*.so; do
+              [ -f "$so" ] || continue
+              normalize_one "$so"
+            done
 
-          echo "== after normalize =="
-          ls -al "$SO_DIR" || true
-          BASH
+            echo "== after normalize =="
+            ls -al "$SO_DIR" || true
+          '
         '''
       }
     }
+
 
 
     /* === 新增：用 patchelf 修改 RPATH === */
