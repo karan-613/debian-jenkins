@@ -116,6 +116,91 @@ pipeline {
       }
     }
 
+    stage('Normalize names & manifest (方案A)') {
+      steps {
+        sh '''
+          set -euo pipefail
+
+          TD="${PKGROOT}/${DEST_SO_DIR}"
+          [ -d "$TD" ] || { echo "[warn] target so dir not found: $TD"; exit 0; }
+
+          # 找到构建产物（版本号命名）
+          ENGINE_SRC=$(ls "$TD"/module-elevoc-engine_*_*.so 2>/dev/null | head -n1 || true)
+          LOCK_SRC=$(ls "$TD"/module-lock-default-sink_*_*.so 2>/dev/null | head -n1 || true)
+          TINY_SRC=$(ls "$TD"/libelevoc-tiny-engine_*_*.so 2>/dev/null | head -n1 || true)
+
+          # 固定文件名（包内最终安装名）
+          ENGINE_DST="$TD/module-elevoc-engine_UOS.so"
+          LOCK_DST="$TD/module-lock-default-sink_UOS.so"
+          TINY_DST="$TD/libelevoc-tiny-engine.so"
+
+          # 从文件名解析 version / arch
+          parse_va() {
+            bn="$(basename "$1")"
+            case "$bn" in
+              module-elevoc-engine_*_*.so|module-lock-default-sink_*_*.so)
+                echo "$bn" | sed -E 's/.*_[A-Za-z0-9]+_([0-9.]+)_([A-Za-z0-9]+)\\.so/\\1 \\2/'
+                ;;
+              libelevoc-tiny-engine_*_*.so)
+                echo "$bn" | sed -E 's/.*_([0-9.]+)_([A-Za-z0-9]+)\\.so/\\1 \\2/'
+                ;;
+              *) echo " " ;;
+            esac
+          }
+
+          # 移动/复制为固定文件名，并记录版本/架构
+          ENGINE_VER=""; ENGINE_ARCH=""
+          if [ -f "$ENGINE_SRC" ]; then
+            mv -f "$ENGINE_SRC" "$ENGINE_DST" 2>/dev/null || cp -f "$ENGINE_SRC" "$ENGINE_DST"
+            read ENGINE_VER ENGINE_ARCH <<EOF || true
+    $(parse_va "$ENGINE_SRC")
+    EOF
+          fi
+
+          LOCK_VER=""; LOCK_ARCH=""
+          if [ -f "$LOCK_SRC" ]; then
+            mv -f "$LOCK_SRC" "$LOCK_DST" 2>/dev/null || cp -f "$LOCK_SRC" "$LOCK_DST"
+            read LOCK_VER LOCK_ARCH <<EOF || true
+    $(parse_va "$LOCK_SRC")
+    EOF
+          fi
+
+          TINY_VER=""; TINY_ARCH=""
+          if [ -f "$TINY_SRC" ]; then
+            mv -f "$TINY_SRC" "$TINY_DST" 2>/dev/null || cp -f "$TINY_SRC" "$TINY_DST"
+            read TINY_VER TINY_ARCH <<EOF || true
+    $(parse_va "$TINY_SRC")
+    EOF
+          fi
+
+          # 计算 sha256
+          sha() { [ -f "$1" ] && sha256sum "$1" | awk '{print $1}' || echo ""; }
+          E_SHA="$(sha "$ENGINE_DST")"
+          L_SHA="$(sha "$LOCK_DST")"
+          T_SHA="$(sha "$TINY_DST")"
+
+          # 生成 manifest.json（包内：/usr/share/elevoc/manifest.json）
+          install -d -m 0755 "${PKGROOT}/usr/share/elevoc"
+          VER="${PKG_VERSION:-${DEB_VER:-1.0.0}}"
+          cat > "${PKGROOT}/usr/share/elevoc/manifest.json" <<JSON
+    {
+      "package": { "name": "${PKG_NAME}", "version": "${VER}", "arch": "${DEB_ARCH}" },
+      "components": {
+        "engine": { "path": "/${DEST_SO_DIR}/$(basename "$ENGINE_DST")", "version": "${ENGINE_VER}", "arch": "${ENGINE_ARCH}", "sha256": "${E_SHA}" },
+        "lock":   { "path": "/${DEST_SO_DIR}/$(basename "$LOCK_DST")",   "version": "${LOCK_VER}",   "arch": "${LOCK_ARCH}",   "sha256": "${L_SHA}" },
+        "tiny_engine": { "path": "/${DEST_SO_DIR}/$(basename "$TINY_DST")", "version": "${TINY_VER}", "arch": "${TINY_ARCH}", "sha256": "${T_SHA}" }
+      },
+      "built_at": "$(date -u +%FT%TZ)"
+    }
+    JSON
+
+          echo "== manifest =="
+          sed 's/^/  /' "${PKGROOT}/usr/share/elevoc/manifest.json"
+        '''
+      }
+    }
+
+
     /* === 新增：用 patchelf 修改 RPATH === */
     stage('Patch RPATH (patchelf)') {
       steps {
@@ -144,8 +229,8 @@ pipeline {
           [ -d "${TARGET_DIR}" ] || { echo "[warn] ${TARGET_DIR} 不存在，跳过"; exit 0; }
 
           # 3) 只对两类目标做处理（存在就改）
-          ENGINE=$(ls "${TARGET_DIR}"/module-elevoc-engine_*.so 2>/dev/null | head -n1 || true)
-          TINY=$(ls "${TARGET_DIR}"/libelevoc-tiny-engine_*.so 2>/dev/null | head -n1 || true)
+          ENGINE=$(ls "${TARGET_DIR}"/module-elevoc-engine_*.so "${TARGET_DIR}"/module-elevoc-engine_UOS.so 2>/dev/null | head -n1 || true)
+          TINY=$(ls "${TARGET_DIR}"/libelevoc-tiny-engine_*.so "${TARGET_DIR}"/libelevoc-tiny-engine.so 2>/dev/null | head -n1 || true)
 
           for so in "${ENGINE}" "${TINY}"; do
             [ -f "${so}" ] || continue
