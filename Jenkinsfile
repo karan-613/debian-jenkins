@@ -119,83 +119,74 @@ pipeline {
     stage('Normalize names & manifest (方案A)') {
       steps {
         sh '''
-          set -euo pipefail
+          bash -euo pipefail <<'BASH'
+          set -x
 
-          TD="${PKGROOT}/${DEST_SO_DIR}"
-          [ -d "$TD" ] || { echo "[warn] target so dir not found: $TD"; exit 0; }
+          SO_DIR="${PKGROOT}/${DEST_SO_DIR}"
+          [ -d "$SO_DIR" ] || exit 0
 
-          # 找到构建产物（版本号命名）
-          ENGINE_SRC=$(ls "$TD"/module-elevoc-engine_*_*.so 2>/dev/null | head -n1 || true)
-          LOCK_SRC=$(ls "$TD"/module-lock-default-sink_*_*.so 2>/dev/null | head -n1 || true)
-          TINY_SRC=$(ls "$TD"/libelevoc-tiny-engine_*_*.so 2>/dev/null | head -n1 || true)
+          # 工具：objcopy 可能未装，装一下
+          if ! command -v objcopy >/dev/null 2>&1; then
+            (sudo -n apt-get update || true)
+            (sudo -n apt-get install -y binutils || true)
+          fi
 
-          # 固定文件名（包内最终安装名）
-          ENGINE_DST="$TD/module-elevoc-engine_UOS.so"
-          LOCK_DST="$TD/module-lock-default-sink_UOS.so"
-          TINY_DST="$TD/libelevoc-tiny-engine.so"
-
-          # 从文件名解析 version / arch
-          parse_va() {
-            bn="$(basename "$1")"
-            case "$bn" in
-              module-elevoc-engine_*_*.so|module-lock-default-sink_*_*.so)
-                echo "$bn" | sed -E 's/.*_[A-Za-z0-9]+_([0-9.]+)_([A-Za-z0-9]+)\\.so/\\1 \\2/'
-                ;;
-              libelevoc-tiny-engine_*_*.so)
-                echo "$bn" | sed -E 's/.*_([0-9.]+)_([A-Za-z0-9]+)\\.so/\\1 \\2/'
-                ;;
-              *) echo " " ;;
-            esac
+          # 写入自定义元数据到 .elevoc.meta 段
+          write_meta() {
+            local so="$1" comp="$2" ver="$3" arch="$4" os="$5"
+            local meta; meta="$(mktemp)"
+            printf 'component=%s\nversion=%s\narch=%s\nos=%s\n' "$comp" "$ver" "$arch" "$os" > "$meta"
+            objcopy --remove-section .elevoc.meta "$so" 2>/dev/null || true
+            objcopy --add-section .elevoc.meta="$meta" --set-section-flags .elevoc.meta=noload,readonly "$so"
+            rm -f "$meta"
           }
 
-          # 移动/复制为固定文件名，并记录版本/架构
-          ENGINE_VER=""; ENGINE_ARCH=""
-          if [ -f "$ENGINE_SRC" ]; then
-            mv -f "$ENGINE_SRC" "$ENGINE_DST" 2>/dev/null || cp -f "$ENGINE_SRC" "$ENGINE_DST"
-            read ENGINE_VER ENGINE_ARCH <<EOF || true
-    $(parse_va "$ENGINE_SRC")
-    EOF
-          fi
+          normalize_one() {
+            local so="$1" base os ver arch comp norm
+            base="$(basename "$so")"
 
-          LOCK_VER=""; LOCK_ARCH=""
-          if [ -f "$LOCK_SRC" ]; then
-            mv -f "$LOCK_SRC" "$LOCK_DST" 2>/dev/null || cp -f "$LOCK_SRC" "$LOCK_DST"
-            read LOCK_VER LOCK_ARCH <<EOF || true
-    $(parse_va "$LOCK_SRC")
-    EOF
-          fi
+            case "$base" in
+              module-elevoc-engine_* )      comp="engine" ;;
+              module-lock-default-sink_* )  comp="lock" ;;
+              libelevoc-tiny-engine_* )     comp="elevoc-tiny" ;;
+              * ) return 0 ;;
+            esac
 
-          TINY_VER=""; TINY_ARCH=""
-          if [ -f "$TINY_SRC" ]; then
-            mv -f "$TINY_SRC" "$TINY_DST" 2>/dev/null || cp -f "$TINY_SRC" "$TINY_DST"
-            read TINY_VER TINY_ARCH <<EOF || true
-    $(parse_va "$TINY_SRC")
-    EOF
-          fi
+            # 从带版本名里提取 os / version / arch
+            os="$(printf '%s' "$base" | sed -n 's/^[^_]*_\\([A-Za-z0-9]\\+\\)_.*/\\1/p')"
+            ver="$(printf '%s' "$base" | sed -n 's/.*_\\([0-9.]\\+\\)_.*/\\1/p')"
+            arch="$(printf '%s' "$base" | sed -n 's/.*_[0-9.]\\+_\\([A-Za-z0-9]\\+\\)\\.so/\\1/p')"
 
-          # 计算 sha256
-          sha() { [ -f "$1" ] && sha256sum "$1" | awk '{print $1}' || echo ""; }
-          E_SHA="$(sha "$ENGINE_DST")"
-          L_SHA="$(sha "$LOCK_DST")"
-          T_SHA="$(sha "$TINY_DST")"
+            # 规范名：
+            # - PA 模块：去掉 _<ver>_<arch>，保留 OS 后缀：module-xxx_<OS>.so
+            # - elevoc-tiny：统一成 libelevoc-tiny-engine.so
+            case "$comp" in
+              elevoc-tiny)
+                norm="libelevoc-tiny-engine.so"
+                ;;
+              *)
+                norm="$(printf '%s' "$base" | sed 's/_[0-9.][0-9.]*_[A-Za-z0-9]\\+\\.so$/.so/')"
+                ;;
+            esac
 
-          # 生成 manifest.json（包内：/usr/share/elevoc/manifest.json）
-          install -d -m 0755 "${PKGROOT}/usr/share/elevoc"
-          VER="${PKG_VERSION:-${DEB_VER:-1.0.0}}"
-          cat > "${PKGROOT}/usr/share/elevoc/manifest.json" <<JSON
-    {
-      "package": { "name": "${PKG_NAME}", "version": "${VER}", "arch": "${DEB_ARCH}" },
-      "components": {
-        "engine": { "path": "/${DEST_SO_DIR}/$(basename "$ENGINE_DST")", "version": "${ENGINE_VER}", "arch": "${ENGINE_ARCH}", "sha256": "${E_SHA}" },
-        "lock":   { "path": "/${DEST_SO_DIR}/$(basename "$LOCK_DST")",   "version": "${LOCK_VER}",   "arch": "${LOCK_ARCH}",   "sha256": "${L_SHA}" },
-        "tiny_engine": { "path": "/${DEST_SO_DIR}/$(basename "$TINY_DST")", "version": "${TINY_VER}", "arch": "${TINY_ARCH}", "sha256": "${T_SHA}" }
-      },
-      "built_at": "$(date -u +%FT%TZ)"
-    }
-    JSON
+            # 把元数据写进“带版本号”的文件里（实体文件）
+            write_meta "$so" "$comp" "$ver" "$arch" "$os"
 
-          echo "== manifest =="
-          sed 's/^/  /' "${PKGROOT}/usr/share/elevoc/manifest.json"
+            # 生成/刷新规范名 -> 带版本文件 的软链接（包里同时保留两种命名更稳）
+            ln -sf "$base" "${SO_DIR}/${norm}"
+
+            echo "[meta] $base  ->  ${norm}  {component=$comp, version=$ver, arch=$arch, os=$os}"
+            readelf -p .elevoc.meta "$so" || true
+          }
+
+          for so in "${SO_DIR}"/*.so; do
+            [ -f "$so" ] || continue
+            normalize_one "$so"
+          done
+
+          echo "== after normalize =="
+          ls -al "$SO_DIR" || true
+          BASH
         '''
       }
     }
