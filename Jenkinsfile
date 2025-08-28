@@ -187,8 +187,8 @@ pipeline {
               size="$(stat -c %s "$SO_DIR/$norm" 2>/dev/null || stat -f %z "$SO_DIR/$norm" 2>/dev/null || echo 0)"
               sha="$( (sha256sum "$SO_DIR/$norm" 2>/dev/null || shasum -a 256 "$SO_DIR/$norm" 2>/dev/null) | awk "{print \\$1}" )"
               [ $first -eq 0 ] && echo "," >> "$tmpm" || first=0
-              printf "  {\"file\":\"%s\",\"component\":\"%s\",\"version\":\"%s\",\"arch\":\"%s\",\"os\":\"%s\",\"size\":%s,\"sha256\":\"%s\"}" \
-                    "$norm" "$comp" "$ver" "$arch" "$os" "$size" "$sha" >> "$tmpm"
+              printf "  {\"file\":\"%s\",\"component\":\"%s\",\"version\":\"%s\",\"arch\":\"%s\",\"os\":\"%s\",\"size\":%s\"}" \
+                    "$norm" "$comp" "$ver" "$arch" "$os" "$size" >> "$tmpm"
 
               echo "[normalized] $base  ->  $norm   {c=$comp v=$ver arch=$arch os=$os}"
               (readelf -p .elevoc.meta "$SO_DIR/$norm" || true)
