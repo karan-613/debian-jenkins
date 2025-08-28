@@ -120,16 +120,21 @@ pipeline {
       steps {
         sh '''
           bash -lc '
-            set -euo pipefail; set -x
+            set -euo pipefail
 
             SO_DIR="${PKGROOT}/${DEST_SO_DIR}"
             [ -d "$SO_DIR" ] || exit 0
 
-            # 确保 objcopy 可用
+            # 需要 objcopy
             if ! command -v objcopy >/dev/null 2>&1; then
               (sudo -n apt-get update || true)
               (sudo -n apt-get install -y binutils || true)
             fi
+
+            manifest="$SO_DIR/manifest.json"
+            tmpm="$(mktemp)"
+            echo "[" > "$tmpm"
+            first=1
 
             write_meta() {
               local so="$1" comp="$2" ver="$3" arch="$4" os="$5"
@@ -141,44 +146,63 @@ pipeline {
             }
 
             normalize_one() {
-              local path="$1" base os="" ver="" arch="" comp="" norm=""
+              local path="$1"; local base os ver arch comp norm
               base="$(basename "$path")"
 
               case "$base" in
-                module-elevoc-engine_* )      comp="engine";;
-                module-lock-default-sink_* )  comp="lock";;
-                libelevoc-tiny-engine_* )     comp="elevoc-tiny";;
-                * ) return 0;;
+                module-elevoc-engine_* )
+                  comp="engine"
+                  os="$(  echo "$base" | sed -E "s/^[^_]*_([A-Za-z0-9]+)_.*/\\1/")"
+                  ver="$( echo "$base" | sed -E "s/.*_([0-9.]+)_[A-Za-z0-9_]+\\.so$/\\1/")"
+                  arch="$(echo "$base" | sed -E "s/.*_[0-9.]+_([A-Za-z0-9_]+)\\.so$/\\1/")"
+                  norm="module-elevoc-engine_${os}.so"
+                  ;;
+                module-lock-default-sink_* )
+                  comp="lock"
+                  os="$(  echo "$base" | sed -E "s/^[^_]*_([A-Za-z0-9]+)_.*/\\1/")"
+                  ver="$( echo "$base" | sed -E "s/.*_([0-9.]+)_[A-Za-z0-9_]+\\.so$/\\1/")"
+                  arch="$(echo "$base" | sed -E "s/.*_[0-9.]+_([A-Za-z0-9_]+)\\.so$/\\1/")"
+                  norm="module-lock-default-sink_${os}.so"
+                  ;;
+                libelevoc-tiny-engine_* )
+                  comp="elevoc-tiny"
+                  os=""
+                  ver="$( echo "$base" | sed -E "s/.*_([0-9.]+)_[A-Za-z0-9_]+\\.so$/\\1/")"
+                  arch="$(echo "$base" | sed -E "s/.*_[0-9.]+_([A-Za-z0-9_]+)\\.so$/\\1/")"
+                  norm="libelevoc-tiny-engine.so"
+                  ;;
+                * )
+                  return 0
+                  ;;
               esac
 
-              # 提取字段（注意架构含下划线）
-              if [ "$comp" = "elevoc-tiny" ]; then
-                ver="$(  echo "$base" | sed -E "s/.*_([0-9.]+)_[A-Za-z0-9_]+\\.so$/\\1/")"
-                arch="$( echo "$base" | sed -E "s/.*_[0-9.]+_([A-Za-z0-9_]+)\\.so$/\\1/")"
-                os=""
-                norm="libelevoc-tiny-engine.so"
-              else
-                os="$(   echo "$base" | sed -E "s/^[^_]*_([A-Za-z0-9]+)_.*/\\1/")"
-                ver="$(  echo "$base" | sed -E "s/.*_([0-9.]+)_[A-Za-z0-9_]+\\.so$/\\1/")"
-                arch="$( echo "$base" | sed -E "s/.*_[0-9.]+_([A-Za-z0-9_]+)\\.so$/\\1/")"
-                # 规范名：去掉 _<ver>_<arch>，保留 OS
-                norm="$(echo "$base" | sed -E "s/_[0-9.]+_[A-Za-z0-9_]+\\.so$/.so/")"
-              fi
-
+              # 1) 写入 ELF 内嵌元数据
               write_meta "$path" "$comp" "$ver" "$arch" "$os"
 
-              # 生成软链（规范名 -> 带版本的实体文件）
-              ln -sf "$base" "$SO_DIR/$norm"
+              # 2) 生成规范名“实体文件”，并删除旧的带版本文件
+              cp -f "$path" "$SO_DIR/$norm"
+              rm -f "$path"
 
-              echo "[meta] $base -> $norm {c=$comp v=$ver arch=$arch os=$os}"
-              # 在“实体文件”上读 meta（避免对软链读失败）
-              readelf -p .elevoc.meta "$path" || true
+              # 3) 统计信息 -> manifest.json
+              size="$(stat -c %s "$SO_DIR/$norm" 2>/dev/null || stat -f %z "$SO_DIR/$norm" 2>/dev/null || echo 0)"
+              sha="$( (sha256sum "$SO_DIR/$norm" 2>/dev/null || shasum -a 256 "$SO_DIR/$norm" 2>/dev/null) | awk "{print \\$1}" )"
+              [ $first -eq 0 ] && echo "," >> "$tmpm" || first=0
+              printf "  {\"file\":\"%s\",\"component\":\"%s\",\"version\":\"%s\",\"arch\":\"%s\",\"os\":\"%s\",\"size\":%s,\"sha256\":\"%s\"}" \
+                    "$norm" "$comp" "$ver" "$arch" "$os" "$size" "$sha" >> "$tmpm"
+
+              echo "[normalized] $base  ->  $norm   {c=$comp v=$ver arch=$arch os=$os}"
+              (readelf -p .elevoc.meta "$SO_DIR/$norm" || true)
             }
 
-            for so in "$SO_DIR"/*.so; do
-              [ -f "$so" ] || continue
-              normalize_one "$so"
+            # 处理目录下所有 .so
+            for f in "$SO_DIR"/*.so; do
+              [ -f "$f" ] || continue
+              normalize_one "$f"
             done
+
+            echo "]" >> "$tmpm"
+            mv -f "$tmpm" "$manifest"
+            echo "== manifest.json =="; cat "$manifest" || true
 
             echo "== after normalize =="
             ls -al "$SO_DIR" || true
@@ -186,6 +210,7 @@ pipeline {
         '''
       }
     }
+
 
 
 
