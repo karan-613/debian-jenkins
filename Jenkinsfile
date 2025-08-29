@@ -21,6 +21,7 @@ pipeline {
 
     // 产物要放入包内的目标路径（若你的 deb 仓库用自定义目录，只改这两项）
     string(name: 'DEST_SO_DIR',  defaultValue: 'usr/lib1', description: 'so 安装到 Deb 包内的目录（相对 PKGROOT）')
+    string(name: 'DEST_LIBELEVOC_TINY_ENGINE_SO_DIR', defaultValue: 'opt/elevoc/lib', description: 'libelevoc-tiny-engine.so 安装到Deb包内的目录（相对 PKGROOT）')
     string(name: 'DEST_SVC_DIR', defaultValue: 'opt/elevoc/tmp1',                description: 'service 产物安装目录（相对 PKGROOT）')
 
         // 可选：自定义 RPATH（不填则按架构给默认值）
@@ -155,7 +156,7 @@ pipeline {
                   os="$(  echo "$base" | sed -E "s/^[^_]*_([A-Za-z0-9]+)_.*/\\1/")"
                   ver="$( echo "$base" | sed -E "s/.*_([0-9.]+)_[A-Za-z0-9_]+\\.so$/\\1/")"
                   arch="$(echo "$base" | sed -E "s/.*_[0-9.]+_([A-Za-z0-9_]+)\\.so$/\\1/")"
-                  norm="module-elevoc-engine_${os}.so"
+                  norm="module-elevoc-engine.so"
                   ;;
                 module-lock-default-sink_* )
                   comp="lock"
@@ -169,7 +170,7 @@ pipeline {
                   os=""
                   ver="$( echo "$base" | sed -E "s/.*_([0-9.]+)_[A-Za-z0-9_]+\\.so$/\\1/")"
                   arch="$(echo "$base" | sed -E "s/.*_[0-9.]+_([A-Za-z0-9_]+)\\.so$/\\1/")"
-                  norm="libelevoc-tiny-engine.so"
+                  norm="libelevoc-tiny-engine_${ver}_${arch}.so"
                   ;;
                 * )
                   return 0
@@ -239,11 +240,13 @@ pipeline {
           echo "[info] target RPATH: ${RPATH} (arch=${DEB_ARCH})"
 
           TARGET_DIR="${PKGROOT}/${DEST_SO_DIR}"
+          TARGET_LIBELEVOC_DIR="${PKGROOT}/${DEST_LIBELEVOC_TINY_ENGINE_SO_DIR}"
           [ -d "${TARGET_DIR}" ] || { echo "[warn] ${TARGET_DIR} 不存在，跳过"; exit 0; }
+          [ -d "${TARGET_LIBELEVOC_DIR}" ] || { echo "[warn] ${TARGET_LIBELEVOC_DIR} 不存在，跳过"; exit 0; }
 
           # 3) 只对两类目标做处理（存在就改）
           ENGINE=$(ls "${TARGET_DIR}"/module-elevoc-engine_*.so "${TARGET_DIR}"/module-elevoc-engine_UOS.so 2>/dev/null | head -n1 || true)
-          TINY=$(ls "${TARGET_DIR}"/libelevoc-tiny-engine_*.so "${TARGET_DIR}"/libelevoc-tiny-engine.so 2>/dev/null | head -n1 || true)
+          TINY=$(ls "${TARGET_LIBELEVOC_DIR}"/libelevoc-tiny-engine_*.so "${TARGET_LIBELEVOC_DIR}"/libelevoc-tiny-engine.so 2>/dev/null | head -n1 || true)
 
           for so in "${ENGINE}" "${TINY}"; do
             [ -f "${so}" ] || continue
