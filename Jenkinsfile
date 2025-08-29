@@ -43,7 +43,7 @@ pipeline {
           test -d "${PKGROOT}/DEBIAN" || { echo "❌ 在仓库中找不到 ${PKGROOT}/DEBIAN，请确认 PKGROOT 参数与目录结构。"; exit 2; }
           mkdir -p "${DIST_DIR}"
           # 确保目标安装目录存在
-          mkdir -p "${PKGROOT}/${DEST_SO_DIR}" "${PKGROOT}/${DEST_SVC_DIR}"
+          mkdir -p "${PKGROOT}/${DEST_SO_DIR}" "${PKGROOT}/${DEST_SVC_DIR}" "${PKGROOT}/${DEST_LIBELEVOC_TINY_ENGINE_SO_DIR}"
         '''
       }
     }
@@ -87,22 +87,29 @@ pipeline {
           echo "== src pulse (top) ==";    ls -al "${SRC_PULSE}"  || true
           echo "== src service (top) ==";  ls -al "${SRC_SVC}"    || true
 
-          # ----- 拷贝 .so -----
-          mkdir -p "${PKGROOT}/${DEST_SO_DIR}"
-          if [ -n "$(find "${SRC_PULSE}" -maxdepth 1 -type f -name '*.so' -print -quit 2>/dev/null)" ]; then
-            find "${SRC_PULSE}" -maxdepth 1 -type f -name '*.so' -exec cp -v -t "${PKGROOT}/${DEST_SO_DIR}/" {} +
+          # 目标目录
+          mkdir -p "${PKGROOT}/${DEST_SO_DIR}" \
+                  "${PKGROOT}/${DEST_LIBELEVOC_TINY_ENGINE_SO_DIR}" \
+                  "${PKGROOT}/${DEST_SVC_DIR}"
+
+          # ---- engine/lock -> DEST_SO_DIR ----
+          if [ -d "${SRC_PULSE}" ]; then
+            find "${SRC_PULSE}" -maxdepth 1 -type f -name "module-elevoc-engine_*.so" \
+              -exec cp -v -t "${PKGROOT}/${DEST_SO_DIR}/" {} +
+            find "${SRC_PULSE}" -maxdepth 1 -type f -name "module-lock-default-sink_*.so" \
+              -exec cp -v -t "${PKGROOT}/${DEST_SO_DIR}/" {} +
+            # ---- tiny -> DEST_LIBELEVOC_TINY_ENGINE_SO_DIR（不重命名） ----
+            find "${SRC_PULSE}" -maxdepth 1 -type f -name "libelevoc-tiny-engine_*.so" \
+              -exec cp -v -t "${PKGROOT}/${DEST_LIBELEVOC_TINY_ENGINE_SO_DIR}/" {} +
           else
-            echo "[warn] no .so under ${SRC_PULSE}"
+            echo "[warn] no pulseaudio artifacts dir: ${SRC_PULSE}"
           fi
 
-          # ----- 拷贝 service 产物（文件 + 目录） -----
-          mkdir -p "${PKGROOT}/${DEST_SVC_DIR}"
+          # ---- service 产物 -> DEST_SVC_DIR（保持原逻辑） ----
           if [ -d "${SRC_SVC}" ] && [ -n "$(ls -A "${SRC_SVC}" 2>/dev/null)" ]; then
-            # 文件
             if [ -n "$(find "${SRC_SVC}" -maxdepth 1 -type f -print -quit 2>/dev/null)" ]; then
               find "${SRC_SVC}" -maxdepth 1 -type f -exec cp -v -t "${PKGROOT}/${DEST_SVC_DIR}/" {} +
             fi
-            # 目录
             if [ -n "$(find "${SRC_SVC}" -maxdepth 1 -mindepth 1 -type d -print -quit 2>/dev/null)" ]; then
               find "${SRC_SVC}" -maxdepth 1 -mindepth 1 -type d -exec cp -rv -t "${PKGROOT}/${DEST_SVC_DIR}/" {} +
             fi
@@ -110,12 +117,14 @@ pipeline {
             echo "[warn] no service artifacts under ${SRC_SVC}"
           fi
 
-          echo "== package tree preview =="
-          ls -al "${PKGROOT}/${DEST_SO_DIR}"  || true
+          echo "== preview =="
+          ls -al "${PKGROOT}/${DEST_SO_DIR}" || true
+          ls -al "${PKGROOT}/${DEST_LIBELEVOC_TINY_ENGINE_SO_DIR}" || true
           ls -al "${PKGROOT}/${DEST_SVC_DIR}" || true
         '''
       }
     }
+
 
     stage('Normalize names & manifest (方案A)') {
       steps {
@@ -123,8 +132,8 @@ pipeline {
           bash -lc '
             set -euo pipefail
 
-            SO_DIR="${PKGROOT}/${DEST_SO_DIR}"
-            [ -d "$SO_DIR" ] || exit 0
+            SO_DIR="${PKGROOT}/${DEST_SO_DIR}"                                  # engine/lock 所在
+            TINY_DIR="${PKGROOT}/${DEST_LIBELEVOC_TINY_ENGINE_SO_DIR}"          # tiny 所在
 
             # 需要 objcopy
             if ! command -v objcopy >/dev/null 2>&1; then
@@ -132,7 +141,7 @@ pipeline {
               (sudo -n apt-get install -y binutils || true)
             fi
 
-            manifest="$SO_DIR/manifest.json"
+            manifest="${SO_DIR}/manifest.json"
             tmpm="$(mktemp)"
             echo "[" > "$tmpm"
             first=1
@@ -146,74 +155,75 @@ pipeline {
               rm -f "$meta"
             }
 
-            normalize_one() {
-              local path="$1"; local base os ver arch comp norm
-              base="$(basename "$path")"
-
-              case "$base" in
-                module-elevoc-engine_* )
-                  comp="engine"
-                  os="$(  echo "$base" | sed -E "s/^[^_]*_([A-Za-z0-9]+)_.*/\\1/")"
-                  ver="$( echo "$base" | sed -E "s/.*_([0-9.]+)_[A-Za-z0-9_]+\\.so$/\\1/")"
-                  arch="$(echo "$base" | sed -E "s/.*_[0-9.]+_([A-Za-z0-9_]+)\\.so$/\\1/")"
-                  norm="module-elevoc-engine.so"
-                  ;;
-                module-lock-default-sink_* )
-                  comp="lock"
-                  os="$(  echo "$base" | sed -E "s/^[^_]*_([A-Za-z0-9]+)_.*/\\1/")"
-                  ver="$( echo "$base" | sed -E "s/.*_([0-9.]+)_[A-Za-z0-9_]+\\.so$/\\1/")"
-                  arch="$(echo "$base" | sed -E "s/.*_[0-9.]+_([A-Za-z0-9_]+)\\.so$/\\1/")"
-                  norm="module-lock-default-sink_${os}.so"
-                  ;;
-                libelevoc-tiny-engine_* )
-                  comp="elevoc-tiny"
-                  os=""
-                  ver="$( echo "$base" | sed -E "s/.*_([0-9.]+)_[A-Za-z0-9_]+\\.so$/\\1/")"
-                  arch="$(echo "$base" | sed -E "s/.*_[0-9.]+_([A-Za-z0-9_]+)\\.so$/\\1/")"
-                  norm="libelevoc-tiny-engine_${ver}_${arch}.so"
-                  ;;
-                * )
-                  return 0
-                  ;;
-              esac
-
-              # 1) 写入 ELF 内嵌元数据
-              write_meta "$path" "$comp" "$ver" "$arch" "$os"
-
-              # 2) 生成规范名“实体文件”，并删除旧的带版本文件
-              cp -f "$path" "$SO_DIR/$norm"
-              rm -f "$path"
-
-              # 3) 统计信息 -> manifest.json
-              size="$(stat -c %s "$SO_DIR/$norm" 2>/dev/null || stat -f %z "$SO_DIR/$norm" 2>/dev/null || echo 0)"
-              sha="$( (sha256sum "$SO_DIR/$norm" 2>/dev/null || shasum -a 256 "$SO_DIR/$norm" 2>/dev/null) | awk "{print \\$1}" )"
+            add_manifest_entry() {
+              local f="$1" comp="$2" ver="$3" arch="$4" os="$5"
+              local size sha
+              size="$(stat -c %s "$f" 2>/dev/null || stat -f %z "$f" 2>/dev/null || echo 0)"
+              sha="$( (sha256sum "$f" 2>/dev/null || shasum -a 256 "$f" 2>/dev/null) | awk "{print \\$1}" )"
               [ $first -eq 0 ] && echo "," >> "$tmpm" || first=0
               printf "  {\"file\":\"%s\",\"component\":\"%s\",\"version\":\"%s\",\"arch\":\"%s\",\"os\":\"%s\",\"size\":%s}" \
-                    "$norm" "$comp" "$ver" "$arch" "$os" "$size" >> "$tmpm"
-
-              echo "[normalized] $base  ->  $norm   {c=$comp v=$ver arch=$arch os=$os}"
-              (readelf -p .elevoc.meta "$SO_DIR/$norm" || true)
+                    "$(basename "$f")" "$comp" "$ver" "$arch" "$os" "$size" >> "$tmpm"
             }
 
-            # 处理目录下所有 .so
-            for f in "$SO_DIR"/*.so; do
-              [ -f "$f" ] || continue
-              normalize_one "$f"
-            done
+            # ---- 处理 engine/lock（位于 SO_DIR）：重命名为规范名 ----
+            if [ -d "$SO_DIR" ]; then
+              for path in "$SO_DIR"/module-elevoc-engine_*.so "$SO_DIR"/module-lock-default-sink_*.so; do
+                [ -f "$path" ] || continue
+                base="$(basename "$path")"
+                case "$base" in
+                  module-elevoc-engine_* )
+                    comp="engine"
+                    os="$(  echo "$base" | sed -E "s/^[^_]*_([A-Za-z0-9]+)_.*/\\1/")"
+                    ver="$( echo "$base" | sed -E "s/.*_([0-9.]+)_[A-Za-z0-9_]+\\.so$/\\1/")"
+                    arch="$(echo "$base" | sed -E "s/.*_[0-9.]+_([A-Za-z0-9_]+)\\.so$/\\1/")"
+                    norm="module-elevoc-engine.so"
+                    ;;
+                  module-lock-default-sink_* )
+                    comp="lock"
+                    os="$(  echo "$base" | sed -E "s/^[^_]*_([A-Za-z0-9]+)_.*/\\1/")"
+                    ver="$( echo "$base" | sed -E "s/.*_([0-9.]+)_[A-Za-z0-9_]+\\.so$/\\1/")"
+                    arch="$(echo "$base" | sed -E "s/.*_[0-9.]+_([A-Za-z0-9_]+)\\.so$/\\1/")"
+                    norm="module-lock-default-sink.so"
+                    ;;
+                esac
+                # 写 meta、重命名（复制后删旧）
+                write_meta "$path" "$comp" "$ver" "$arch" "$os"
+                cp -f "$path" "$SO_DIR/$norm"
+                rm -f "$path"
+                add_manifest_entry "$SO_DIR/$norm" "$comp" "$ver" "$arch" "$os"
+                echo "[normalized] $base -> $norm {c=$comp v=$ver arch=$arch os=$os}"
+                (readelf -p .elevoc.meta "$SO_DIR/$norm" || true)
+              done
+            fi
+
+            # ---- 处理 tiny（位于 TINY_DIR）：只写 meta，不重命名 ----
+            if [ -d "$TINY_DIR" ]; then
+              for path in "$TINY_DIR"/libelevoc-tiny-engine_*.so; do
+                [ -f "$path" ] || continue
+                base="$(basename "$path")"
+                comp="elevoc-tiny"
+                os=""
+                ver="$( echo "$base" | sed -E "s/.*_([0-9.]+)_[A-Za-z0-9_]+\\.so$/\\1/")"
+                arch="$(echo "$base" | sed -E "s/.*_[0-9.]+_([A-Za-z0-9_]+)\\.so$/\\1/")"
+                write_meta "$path" "$comp" "$ver" "$arch" "$os"
+                add_manifest_entry "$path" "$comp" "$ver" "$arch" "$os"
+                echo "[meta-only] $base {c=$comp v=$ver arch=$arch os=$os}"
+                (readelf -p .elevoc.meta "$path" || true)
+              done
+            fi
 
             echo "]" >> "$tmpm"
             mv -f "$tmpm" "$manifest"
             echo "== manifest.json =="; cat "$manifest" || true
 
-            echo "== after normalize =="
+            echo "== after normalize (SO_DIR) =="
             ls -al "$SO_DIR" || true
+            echo "== after normalize (TINY_DIR) =="
+            ls -al "$TINY_DIR" || true
           '
         '''
       }
     }
-
-
-
 
     /* === 新增：用 patchelf 修改 RPATH === */
     stage('Patch RPATH (patchelf)') {
@@ -241,8 +251,14 @@ pipeline {
 
           TARGET_DIR="${PKGROOT}/${DEST_SO_DIR}"
           TARGET_LIBELEVOC_DIR="${PKGROOT}/${DEST_LIBELEVOC_TINY_ENGINE_SO_DIR}"
-          [ -d "${TARGET_DIR}" ] || { echo "[warn] ${TARGET_DIR} 不存在，跳过"; exit 0; }
-          [ -d "${TARGET_LIBELEVOC_DIR}" ] || { echo "[warn] ${TARGET_LIBELEVOC_DIR} 不存在，跳过"; exit 0; }
+          ENGINE=""
+          TINY=""
+          if [ -d "${TARGET_DIR}" ]; then
+            ENGINE=$(ls "${TARGET_DIR}"/module-elevoc-engine_*.so "${TARGET_DIR}"/module-elevoc-engine*.so 2>/dev/null | head -n1 || true)
+          fi
+          if [ -d "${TARGET_LIBELEVOC_DIR}" ]; then
+            TINY=$(ls "${TARGET_LIBELEVOC_DIR}"/libelevoc-tiny-engine_*.so "${TARGET_LIBELEVOC_DIR}"/libelevoc-tiny-engine.so 2>/dev/null | head -n1 || true)
+          fi
 
           # 3) 只对两类目标做处理（存在就改）
           ENGINE=$(ls "${TARGET_DIR}"/module-elevoc-engine_*.so "${TARGET_DIR}"/module-elevoc-engine_UOS.so 2>/dev/null | head -n1 || true)
