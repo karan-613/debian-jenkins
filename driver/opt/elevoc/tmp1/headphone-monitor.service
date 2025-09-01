@@ -1,0 +1,13 @@
+[Unit]
+Description=Headphone Monitor Service
+After=pulseaudio.service
+Requires=pulseaudio.service
+
+[Service]
+ExecStart=/opt/elevoc/tmp1/detect-elevoc
+Restart=always
+StandardOutput=syslog
+StandardError=syslog
+
+[Install]
+WantedBy=default.target
