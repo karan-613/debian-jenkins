@@ -105,7 +105,7 @@ pipeline {
             echo "[warn] no pulseaudio artifacts dir: ${SRC_PULSE}"
           fi
 
-          # ---- service 产物 -> DEST_SVC_DIR（保持原逻辑） ----
+          # ---- service 产物 -> DEST_SVC_DIR（后续再重命名） ----
           if [ -d "${SRC_SVC}" ] && [ -n "$(ls -A "${SRC_SVC}" 2>/dev/null)" ]; then
             if [ -n "$(find "${SRC_SVC}" -maxdepth 1 -type f -print -quit 2>/dev/null)" ]; then
               find "${SRC_SVC}" -maxdepth 1 -type f -exec cp -v -t "${PKGROOT}/${DEST_SVC_DIR}/" {} +
@@ -134,6 +134,7 @@ pipeline {
 
             SO_DIR="${PKGROOT}/${DEST_SO_DIR}"                                  # engine/lock 所在
             TINY_DIR="${PKGROOT}/${DEST_LIBELEVOC_TINY_ENGINE_SO_DIR}"          # tiny 所在
+            SVC_DIR="${PKGROOT}/${DEST_SVC_DIR}"                                # service 所在
 
             # 需要 objcopy
             if ! command -v objcopy >/dev/null 2>&1; then
@@ -143,7 +144,9 @@ pipeline {
 
             manifest="${SO_DIR}/manifest.json"
             tmpm="$(mktemp)"
-            echo "[" > "$tmpm"
+            {
+              echo "["
+            } > "$tmpm"
             first=1
 
             write_meta() {
@@ -157,12 +160,17 @@ pipeline {
 
             add_manifest_entry() {
               local f="$1" comp="$2" ver="$3" arch="$4" os="$5"
-              local size sha
+              local size
               size="$(stat -c %s "$f" 2>/dev/null || stat -f %z "$f" 2>/dev/null || echo 0)"
-              sha="$( (sha256sum "$f" 2>/dev/null || shasum -a 256 "$f" 2>/dev/null) | awk "{print \\$1}" )"
-              [ $first -eq 0 ] && echo "," >> "$tmpm" || first=0
-              printf "  {\"file\":\"%s\",\"component\":\"%s\",\"version\":\"%s\",\"arch\":\"%s\",\"os\":\"%s\",\"size\":%s}" \
-                    "$(basename "$f")" "$comp" "$ver" "$arch" "$os" "$size" >> "$tmpm"
+              if [ $first -eq 0 ]; then echo "," >> "$tmpm"; else first=0; fi
+              printf "  {\\n"                                >> "$tmpm"
+              printf "    \\"file\\": \\"%s\\",\\n"          "$(basename "$f")" >> "$tmpm"
+              printf "    \\"component\\": \\"%s\\",\\n"     "$comp"            >> "$tmpm"
+              printf "    \\"version\\": \\"%s\\",\\n"       "$ver"             >> "$tmpm"
+              printf "    \\"arch\\": \\"%s\\",\\n"          "$arch"            >> "$tmpm"
+              printf "    \\"os\\": \\"%s\\",\\n"            "$os"              >> "$tmpm"
+              printf "    \\"size\\": %s\\n"                 "$size"            >> "$tmpm"
+              printf "  }"                                   >> "$tmpm"
             }
 
             # ---- 处理 engine/lock（位于 SO_DIR）：重命名为规范名 ----
@@ -186,7 +194,6 @@ pipeline {
                     norm="module-lock-default-sink.so"
                     ;;
                 esac
-                # 写 meta、重命名（复制后删旧）
                 write_meta "$path" "$comp" "$ver" "$arch" "$os"
                 cp -f "$path" "$SO_DIR/$norm"
                 rm -f "$path"
@@ -212,6 +219,26 @@ pipeline {
               done
             fi
 
+            # ---- 处理 service（位于 SVC_DIR）：重命名为 detect-AudioDevice，并写 manifest ----
+            if [ -d "$SVC_DIR" ]; then
+              for path in "$SVC_DIR"/detect-AudioDevice-*; do
+                [ -f "$path" ] || continue
+                base="$(basename "$path")"
+                comp="detect"   # 或改成 "service"
+                os=""
+                ver="$( echo "$base" | sed -E "s/^detect-AudioDevice-([0-9.]+)-[A-Za-z0-9_]+$/\\1/")"
+                arch="$(echo "$base" | sed -E "s/^detect-AudioDevice-[0-9.]+-([A-Za-z0-9_]+)$/\\1/")"
+
+                target="$SVC_DIR/detect-AudioDevice"
+                cp -f "$path" "$target"
+                rm -f "$path"
+                chmod 0755 "$target" || true
+
+                add_manifest_entry "$target" "$comp" "$ver" "$arch" "$os"
+                echo "[svc-rename] $base -> $(basename "$target") {c=$comp v=$ver arch=$arch os=$os}"
+              done
+            fi
+
             echo "]" >> "$tmpm"
             mv -f "$tmpm" "$manifest"
             echo "== manifest.json =="; cat "$manifest" || true
@@ -220,6 +247,8 @@ pipeline {
             ls -al "$SO_DIR" || true
             echo "== after normalize (TINY_DIR) =="
             ls -al "$TINY_DIR" || true
+            echo "== after normalize (SVC_DIR) =="
+            ls -al "$SVC_DIR" || true
           '
         '''
       }
