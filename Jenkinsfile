@@ -48,6 +48,48 @@ pipeline {
       }
     }
 
+    stage('Inject Res & set control arch') {
+      steps {
+        sh '''
+          set -e
+
+          # 1) 选择 Res 子目录：amd64 -> x86；arm64 -> arm64
+          case "${DEB_ARCH}" in
+            amd64) RES_SUBDIR="x86"   ;;
+            arm64) RES_SUBDIR="arm64" ;;
+            *)     echo "[warn] 未知 DEB_ARCH=${DEB_ARCH}，默认用 x86"; RES_SUBDIR="x86" ;;
+          esac
+
+          SRC_RES="Res/${RES_SUBDIR}"
+          DEST_DIR="${PKGROOT}/${DEST_SO_DIR}"   # 通常是 driver/usr/lib1
+          mkdir -p "${DEST_DIR}"
+
+          if [ -d "${SRC_RES}" ] && [ -n "$(ls -A "${SRC_RES}" 2>/dev/null)" ]; then
+            echo "[info] 拷贝 Res/${RES_SUBDIR}/* -> ${DEST_DIR}"
+            cp -v "${SRC_RES}"/* "${DEST_DIR}/"
+          else
+            echo "[warn] 未发现资源目录或为空：${SRC_RES}"
+          fi
+
+          echo "== 目标目录预览 =="
+          ls -al "${DEST_DIR}" || true
+
+          # 2) 修改 control 的 Architecture 字段
+          CTRL="${PKGROOT}/DEBIAN/control"
+          if [ -f "${CTRL}" ]; then
+            echo "[info] 设置 Architecture: ${DEB_ARCH} -> ${CTRL}"
+            # 用 sed 覆盖 Architecture: 这一行（保持键名大小写）
+            sed -i -E "s/^(Architecture:[[:space:]]*).*/\\1${DEB_ARCH}/" "${CTRL}"
+            echo "---- control 当前内容 ----"
+            cat "${CTRL}"
+            echo "-------------------------"
+          else
+            echo "[warn] 未找到 control 文件：${CTRL}"
+          fi
+        '''
+      }
+    }
+
     stage('Fetch artifacts from children') {
       steps {
         script {
