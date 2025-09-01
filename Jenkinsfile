@@ -203,7 +203,7 @@ pipeline {
               done
             fi
 
-            # ---- 处理 tiny（位于 TINY_DIR）：只写 meta，不重命名 ----
+            # ---- 处理 tiny（位于 TINY_DIR）：重命名为 libelevoc-tiny-engine.so ----
             if [ -d "$TINY_DIR" ]; then
               for path in "$TINY_DIR"/libelevoc-tiny-engine_*.so; do
                 [ -f "$path" ] || continue
@@ -212,10 +212,15 @@ pipeline {
                 os=""
                 ver="$( echo "$base" | sed -E "s/.*_([0-9.]+)_[A-Za-z0-9_]+\\.so$/\\1/")"
                 arch="$(echo "$base" | sed -E "s/.*_[0-9.]+_([A-Za-z0-9_]+)\\.so$/\\1/")"
-                write_meta "$path" "$comp" "$ver" "$arch" "$os"
-                add_manifest_entry "$path" "$comp" "$ver" "$arch" "$os"
-                echo "[meta-only] $base {c=$comp v=$ver arch=$arch os=$os}"
-                (readelf -p .elevoc.meta "$path" || true)
+
+                target="$TINY_DIR/libelevoc-tiny-engine.so"
+                cp -f "$path" "$target"          # 复制到新名
+                write_meta "$target" "$comp" "$ver" "$arch" "$os"   # 在新文件上写 meta
+                rm -f "$path"                    # 删除旧的带版本文件
+
+                add_manifest_entry "$target" "$comp" "$ver" "$arch" "$os"
+                echo "[tiny-rename] $base -> $(basename "$target") {c=$comp v=$ver arch=$arch os=$os}"
+                (readelf -p .elevoc.meta "$target" || true)
               done
             fi
 
