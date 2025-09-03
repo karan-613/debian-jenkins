@@ -25,8 +25,8 @@ pipeline {
     string(name: 'DEST_SVC_DIR', defaultValue: 'opt/elevoc/tmp1',                description: 'service 产物安装目录（相对 PKGROOT）')
 
         // 可选：自定义 RPATH（不填则按架构给默认值）
-    string(name: 'CUSTOM_RPATH_AMD64', defaultValue: '', description: '自定义 amd64 RPATH（留空用默认：\$ORIGIN:/usr/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu/pulseaudio:/lib64:/opt/elevoc/lib）')
-    string(name: 'CUSTOM_RPATH_ARM64', defaultValue: '', description: '自定义 arm64 RPATH（留空用默认：\$ORIGIN:/usr/lib/aarch64-linux-gnu:/lib/aarch64-linux-gnu:/opt/elevoc/lib）')
+    string(name: 'CUSTOM_RPATH_AMD64', defaultValue: '', description: '自定义 amd64 RPATH（留空用默认：$ORIGIN:/usr/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu/pulseaudio:/lib64:/opt/elevoc/lib）')
+    string(name: 'CUSTOM_RPATH_ARM64', defaultValue: '', description: '自定义 arm64 RPATH（留空用默认：$ORIGIN:/usr/lib/aarch64-linux-gnu:/lib/aarch64-linux-gnu:/opt/elevoc/lib）')
   }
 
   environment {
@@ -307,51 +307,42 @@ pipeline {
         sh '''
           set -e
 
-          # 1) 确保 patchelf 可用
+          # 1) patchelf
           if ! command -v patchelf >/dev/null 2>&1; then
-            echo "[info] installing patchelf ..."
             (sudo -n apt-get update || true)
-            (sudo -n apt-get install -y patchelf || sudo apt-get install -y patchelf || apt-get install -y patchelf || true)
+            (sudo -n apt-get install -y patchelf || true)
           fi
-          command -v patchelf >/dev/null 2>&1 || { echo "[warn] patchelf 不可用，跳过 RPATH 修正"; exit 0; }
+          command -v patchelf >/dev/null 2>&1 || { echo "[warn] patchelf 不可用，跳过"; exit 0; }
 
-          # 2) 选定 RPATH（优先使用自定义参数）
-          RPATH_AMD64="${CUSTOM_RPATH_AMD64:-'\$ORIGIN:/usr/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu/pulseaudio:/lib64'}"
-          RPATH_ARM64="${CUSTOM_RPATH_ARM64:-'\$ORIGIN:/usr/lib/aarch64-linux-gnu:/lib/aarch64-linux-gnu'}"
+          # 2) 正确写法：让默认值里保留字面 $ORIGIN（不要写 \\$ORIGIN）
+          RPATH_AMD64=${CUSTOM_RPATH_AMD64:-'$ORIGIN:/usr/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu/pulseaudio:/lib64:/opt/elevoc/lib'}
+          RPATH_ARM64=${CUSTOM_RPATH_ARM64:-'$ORIGIN:/usr/lib/aarch64-linux-gnu:/lib/aarch64-linux-gnu:/opt/elevoc/lib'}
           case "${DEB_ARCH}" in
-            amd64) RPATH="${RPATH_AMD64}" ;;
-            arm64) RPATH="${RPATH_ARM64}" ;;
-            *)     RPATH="$ORIGIN/platforms" ;;
+            amd64) RPATH="$RPATH_AMD64" ;;
+            arm64) RPATH="$RPATH_ARM64" ;;
+            *)     RPATH='$ORIGIN' ;;
           esac
-          echo "[info] target RPATH: ${RPATH} (arch=${DEB_ARCH})"
+          echo "[info] target RPATH: ${RPATH}"
 
           TARGET_DIR="${PKGROOT}/${DEST_SO_DIR}"
-          TARGET_LIBELEVOC_DIR="${PKGROOT}/${DEST_LIBELEVOC_TINY_ENGINE_SO_DIR}"
-          ENGINE=""
-          TINY=""
-          if [ -d "${TARGET_DIR}" ]; then
-            ENGINE=$(ls "${TARGET_DIR}"/module-elevoc-engine_*.so "${TARGET_DIR}"/module-elevoc-engine*.so 2>/dev/null | head -n1 || true)
-          fi
-          if [ -d "${TARGET_LIBELEVOC_DIR}" ]; then
-            TINY=$(ls "${TARGET_LIBELEVOC_DIR}"/libelevoc-tiny-engine_*.so "${TARGET_LIBELEVOC_DIR}"/libelevoc-tiny-engine.so 2>/dev/null | head -n1 || true)
-          fi
+          TARGET_TINY_DIR="${PKGROOT}/${DEST_LIBELEVOC_TINY_ENGINE_SO_DIR}"
 
-          # 3) 只对两类目标做处理（存在就改）
-          ENGINE=$(ls "${TARGET_DIR}"/module-elevoc-engine_*.so "${TARGET_DIR}"/module-elevoc-engine_UOS.so 2>/dev/null | head -n1 || true)
-          TINY=$(ls "${TARGET_LIBELEVOC_DIR}"/libelevoc-tiny-engine_*.so "${TARGET_LIBELEVOC_DIR}"/libelevoc-tiny-engine.so 2>/dev/null | head -n1 || true)
+          # 找目标（engine 取规范名或带版本，tiny 现在是规范名 libelevoc-tiny-engine.so）
+          ENGINE=$(ls "${TARGET_DIR}"/module-elevoc-engine*.so 2>/dev/null | head -n1 || true)
+          TINY=$(ls "${TARGET_TINY_DIR}"/libelevoc-tiny-engine*.so 2>/dev/null | head -n1 || true)
 
           for so in "${ENGINE}" "${TINY}"; do
             [ -f "${so}" ] || continue
-            echo "[info] patching $(basename "${so}") ..."
-            echo "  old:"
-            (readelf -d "${so}" | egrep 'RPATH|RUNPATH' || true)
+            echo ">> patch $(basename "${so}")"
+            echo "  old:"; readelf -d "${so}" | egrep 'RPATH|RUNPATH' || true
             patchelf --set-rpath "${RPATH}" "${so}"
-            echo "  new:"
-            (readelf -d "${so}" | egrep 'RPATH|RUNPATH' || true)
+            # 如果你更想写入 DT_RPATH 而非 DT_RUNPATH，可加 --force-rpath
+            # patchelf --force-rpath --set-rpath "${RPATH}" "${so}"
+            echo "  new:"; readelf -d "${so}" | egrep 'RPATH|RUNPATH' || true
           done
 
           if [ ! -f "${ENGINE}" ] && [ ! -f "${TINY}" ]; then
-            echo "[warn] 未找到需要修改的 .so（module-elevoc-engine_* / libelevoc-tiny-engine_*），跳过"
+            echo "[warn] 未找到需修改的 .so，跳过"
           fi
         '''
       }
