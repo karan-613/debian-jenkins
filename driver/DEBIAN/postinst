@@ -14,7 +14,7 @@ ELEVOC_RES_DIR="/usr/lib/elevoc_engine/x86"
 # 其他资源配置
 cp /usr/lib1/module-elevoc-engine.so /usr/lib/$pulse_version/modules/module-elevoc-engine.so
 cp /usr/lib1/module-lock-default-sink.so /usr/lib/$pulse_version/modules/module-lock-default-sink.so
-cp /usr/lib1/resource/* /usr/lib/
+
 if [ ! -d "$ELEVOC_RES_DIR" ]; then
     mkdir -p "$ELEVOC_RES_DIR"
 fi
@@ -87,9 +87,9 @@ install_services_for_all_gui_users(){
     echo "将为以下所有登录的图形用户安装服务:"
     echo "$all_users" | while IFS= read -r user; do
         [ -z "$user" ] && continue
-        
+
         echo "  - $user"
-        
+
         # 检查用户运行时目录是否存在
         runtime_dir="/run/user/$(id -u "$user")"
         if [ -d "$runtime_dir" ]; then
