@@ -25,8 +25,8 @@ pipeline {
     string(name: 'DEST_SVC_DIR', defaultValue: 'opt/elevoc/tmp1',                description: 'service 产物安装目录（相对 PKGROOT）')
 
         // 可选：自定义 RPATH（不填则按架构给默认值）
-    string(name: 'CUSTOM_RPATH_AMD64', defaultValue: '', description: '自定义 amd64 RPATH（留空用默认：\$ORIGIN:/usr/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu/pulseaudio:/lib64）')
-    string(name: 'CUSTOM_RPATH_ARM64', defaultValue: '', description: '自定义 arm64 RPATH（留空用默认：\$ORIGIN:/usr/lib/aarch64-linux-gnu:/lib/aarch64-linux-gnu）')
+    string(name: 'CUSTOM_RPATH_AMD64', defaultValue: '', description: '自定义 amd64 RPATH（留空用默认：\$ORIGIN:/usr/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu/pulseaudio:/lib64:/opt/elevoc/lib）')
+    string(name: 'CUSTOM_RPATH_ARM64', defaultValue: '', description: '自定义 arm64 RPATH（留空用默认：\$ORIGIN:/usr/lib/aarch64-linux-gnu:/lib/aarch64-linux-gnu:/opt/elevoc/lib）')
   }
 
   environment {
